@@ -1,6 +1,9 @@
 name: Android Signed Release
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -13,7 +16,7 @@ concurrency:
 jobs:
   validate:
     name: Validate web app and Capacitor sync
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.actor != 'github-actions[bot]')
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -44,7 +47,7 @@ jobs:
   android-release:
     name: Build, sign, verify, and publish APK
     needs: validate
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.actor != 'github-actions[bot]')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment:
