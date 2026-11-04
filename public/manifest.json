@@ -6,13 +6,12 @@
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#000000",
-  "theme_color_accent": "#4592FF",
   "icons": [
     {
-      "src": "/assets/aistudio/image_fc0a5fd0.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
     }
   ]
 }
