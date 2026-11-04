@@ -42,11 +42,11 @@ jobs:
         run: npx cap sync android
 
   android-release:
-    name: Build, sign, smoke-test, and publish APK
+    name: Build, sign, verify, and publish APK
     needs: validate
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 45
     environment:
       name: android-release
     permissions:
@@ -84,8 +84,13 @@ jobs:
         run: |
           set -euo pipefail
           latest_tag="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --exclude-drafts --exclude-pre-releases --json tagName --jq '[.[] | select(.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))][0].tagName // ""')"
+          current_package_version="$(node -p "require('./package.json').version")"
           if [[ -z "$latest_tag" ]]; then
-            version='1.0.0'
+            if [[ ! "$current_package_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Current package version is not stable SemVer: $current_package_version" >&2
+              exit 1
+            fi
+            version="$current_package_version"
           else
             if [[ ! "$latest_tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
               echo "Latest stable release tag is not supported SemVer: $latest_tag" >&2
@@ -169,59 +174,6 @@ jobs:
           echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
           echo "size=$size" >> "$GITHUB_OUTPUT"
 
-      - name: Install APK and verify the home screen on Android 16 emulator
-        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
-        with:
-          api-level: 36
-          arch: x86_64
-          target: google_apis
-          disable-animations: true
-          script: |
-            set -eu
-            apk="$GITHUB_WORKSPACE/android/app/build/outputs/apk/release/app-release.apk"
-            adb install -r "$apk"
-            adb shell am force-stop com.athir.datatransfer || true
-            adb logcat -c
-            adb shell am start -W -n com.athir.datatransfer/.MainActivity
-            for attempt in $(seq 1 30); do
-              if adb shell pidof com.athir.datatransfer >/dev/null 2>&1; then break; fi
-              sleep 1
-            done
-            sleep 8
-            adb exec-out screencap -p > "$RUNNER_TEMP/athir-home-screen.png"
-            test -s "$RUNNER_TEMP/athir-home-screen.png"
-            adb logcat -d -t 5000 > "$RUNNER_TEMP/athir-logcat.txt"
-            if grep -q 'FATAL EXCEPTION' "$RUNNER_TEMP/athir-logcat.txt"; then
-              grep -A35 -B5 'FATAL EXCEPTION' "$RUNNER_TEMP/athir-logcat.txt" || true
-              exit 1
-            fi
-            adb shell pidof com.athir.datatransfer >/dev/null
-            adb shell uiautomator dump --compressed /sdcard/athir-window.xml >/dev/null
-            adb pull /sdcard/athir-window.xml "$RUNNER_TEMP/athir-window.xml" >/dev/null
-            python3 - "$RUNNER_TEMP/athir-window.xml" <<'PY'
-            import sys
-            from pathlib import Path
-            xml = Path(sys.argv[1]).read_text(encoding='utf-8', errors='replace')
-            markers = ('نقل البيانات بالأثير', 'بدون إنترنت', 'إرسال', 'استلام', 'Athir')
-            found = [marker for marker in markers if marker in xml]
-            if not found:
-                print(xml[:12000])
-                raise SystemExit('The expected Athir home-screen text was not exposed by the Android UI hierarchy.')
-            print('Android home screen is visible; matched: ' + ', '.join(found))
-            PY
-
-      - name: Preserve emulator screenshot and UI hierarchy evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: android-smoke-evidence-${{ github.run_number }}
-          path: |
-            ${{ runner.temp }}/athir-home-screen.png
-            ${{ runner.temp }}/athir-window.xml
-            ${{ runner.temp }}/athir-logcat.txt
-          if-no-files-found: ignore
-          retention-days: 7
-
       - name: Commit version bump and push release tag
         id: git-release
         env:
@@ -263,7 +215,7 @@ jobs:
           - versionName: \`$VERSION\`; versionCode: \`$VERSION_CODE\`
           - Minimum Android version: Android 7.0 (API 24)
           - Built and signed in GitHub Actions; APK signature and package metadata verified.
-          - Installed and launched on an Android 16 (API 36) emulator; home-screen content checked.
+          - Checks passed: TypeScript, Vite, Capacitor sync, signed Android release build, APK signature, and version metadata.
           - APK size: $APK_SIZE bytes
           - SHA-256: \`$APK_SHA256\`
 
@@ -286,7 +238,7 @@ jobs:
             echo "- APK: \`Athir-v$VERSION.apk\` ($APK_SIZE bytes)"
             echo "- SHA-256: \`$APK_SHA256\`"
             echo "- versionCode: $VERSION_CODE"
-            echo "- Android 16 emulator: installation and home-screen assertion passed."
+            echo "- Emulator testing: skipped as requested."
           } >> "$GITHUB_STEP_SUMMARY"
           echo "Published $RELEASE_TAG: $release_url"
 
