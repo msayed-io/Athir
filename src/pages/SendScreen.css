@@ -1,0 +1,34 @@
+/* Page-scoped styles for SendScreen */
+.send-page {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden !important;
+  box-sizing: border-box;
+  touch-action: pan-y;
+}
+
+.search-input-wrap {
+  margin-bottom: 14px;
+  display: flex;
+  justify-content: center;
+}
+
+.search-input-wrap .lg-input {
+  width: 100%;
+  max-width: 100%;
+  height: 44px;
+  border-radius: 22px;
+  background-color: var(--glass);
+  -webkit-backdrop-filter: blur(20px) saturate(1.8);
+  backdrop-filter: blur(20px) saturate(1.8);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  padding: 0 16px;
+}
+
+.search-input-wrap .lg-input input {
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--t);
+  text-align: right;
+  caret-color: var(--a);
+}

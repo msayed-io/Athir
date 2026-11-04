@@ -1,0 +1,189 @@
+:root {
+  --bg: #000000;
+  --s: #0C0D0F;
+  --s2: #1A1B1F;
+  --track: #111215;
+  --t: #F5F5F7;
+  --t2: rgba(235, 235, 245, 0.60);
+  --t3: rgba(235, 235, 245, 0.30);
+  --h: rgba(255, 255, 255, 0.08);
+  --a: #4592FF;
+  --a-rgb: 69 146 255;
+  --ag: linear-gradient(180deg, #3F8CFF, #1D63E6);
+  --on: #FFFFFF;
+  --danger: #FF453A;
+  --glass: rgba(60, 62, 68, 0.34);
+  --lens: rgba(255, 255, 255, 0.12);
+  --rim: 1;
+}
+
+/* ==========================================================================
+   Android Native App Experience Hardening
+   1. Complete Scrollbar Invisibility with Smooth Momentum Scroll
+   2. Zero Horizontal Shifting & Viewport Lock
+   3. Strict Text Selection & Context Menu Prohibition
+   ========================================================================== */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+
+  /* Prohibition of text selection and system callouts across all UI elements */
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+
+  /* Invisibility of scrollbars across all scrollable containers */
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+/* Allow text selection in genuine user input fields */
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text !important;
+  -moz-user-select: text !important;
+  -ms-user-select: text !important;
+  user-select: text !important;
+  -webkit-touch-callout: default !important;
+  caret-color: var(--a);
+}
+
+/* Hide WebKit scrollbars completely on all engines and elements */
+::-webkit-scrollbar,
+*::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+
+::-webkit-scrollbar-track,
+*::-webkit-scrollbar-track,
+::-webkit-scrollbar-thumb,
+*::-webkit-scrollbar-thumb {
+  display: none !important;
+  background: transparent !important;
+}
+
+/* Prevent image/link dragghosting */
+img,
+svg,
+a {
+  -webkit-user-drag: none;
+  user-drag: none;
+}
+
+/* Strict root window containment: lock window scrolling completely */
+html,
+body,
+#root,
+.app-container {
+  height: 100vh;
+  height: -webkit-fill-available;
+  height: 100dvh;
+  overflow: hidden !important;
+  position: relative;
+  width: 100%;
+}
+
+html {
+  max-width: 100vw;
+  overscroll-behavior: none;
+  touch-action: pan-y;
+  background: var(--bg);
+  color-scheme: dark;
+}
+
+body {
+  font: 17px/1.35 -apple-system, "SF Arabic", "SF Pro Text", "Segoe UI", system-ui, Tahoma, sans-serif;
+  color: var(--t);
+  max-width: 480px;
+  margin: 0 auto;
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+  touch-action: pan-y;
+  caret-color: var(--a);
+}
+
+#root,
+.app-container {
+  max-width: 100%;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+main {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden !important;
+  box-sizing: border-box;
+  padding: calc(env(safe-area-inset-top, 0px) + 78px) 16px 132px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+}
+
+.col {
+  display: grid;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+h1 {
+  font-size: 30px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-align: center;
+}
+
+.sub {
+  color: var(--t2);
+  text-align: center;
+  margin-top: 6px;
+  font-size: 15px;
+}
+
+.h2 {
+  color: var(--t2);
+  font-size: 13px;
+  font-weight: 600;
+  margin: 28px 8px 8px;
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .g,
+  .glass {
+    background: #1C1D21 !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

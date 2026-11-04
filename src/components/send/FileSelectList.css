@@ -1,0 +1,27 @@
+.ck {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1.5px solid var(--t3);
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: transparent;
+  transition: 0.25s;
+}
+
+.ck .i {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2.6;
+}
+
+.sel .ck {
+  background: var(--ag);
+  border-color: transparent;
+  color: var(--on);
+}
+
+.li[data-i] {
+  cursor: pointer;
+}

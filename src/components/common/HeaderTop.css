@@ -1,0 +1,18 @@
+.top {
+  position: fixed;
+  left: 0;
+  right: 0;
+  max-width: 480px;
+  margin: auto;
+  z-index: 20;
+  top: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) 16px 0;
+  pointer-events: none;
+}
+
+.top > * {
+  pointer-events: auto;
+}

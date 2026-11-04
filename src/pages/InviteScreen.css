@@ -1,0 +1,23 @@
+/* Page-scoped styles for InviteScreen */
+.invite-page {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden !important;
+  box-sizing: border-box;
+  touch-action: pan-y;
+}
+
+.toast-notification {
+  position: fixed;
+  bottom: 90px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--s);
+  border: 1px solid var(--h);
+  border-radius: 20px;
+  padding: 10px 20px;
+  font-size: 14px;
+  color: var(--t);
+  z-index: 40;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}

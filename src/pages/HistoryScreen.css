@@ -1,0 +1,8 @@
+/* Page-scoped styles for HistoryScreen */
+.history-page {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden !important;
+  box-sizing: border-box;
+  touch-action: pan-y;
+}

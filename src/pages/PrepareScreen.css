@@ -1,0 +1,59 @@
+/* Styles from setup.html - 100% exact match */
+.prepare-page {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 96px);
+}
+
+.prepare-page .rd.s {
+  transform: scale(0.72);
+  margin: -42px 0;
+}
+
+.prepare-page .pm {
+  padding: 18px 16px;
+}
+
+.prepare-page .pm + .pm {
+  border-top: 0.5px solid var(--h);
+}
+
+.prepare-page .pm .ic {
+  color: var(--a);
+}
+
+.prepare-page .pm .t {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.prepare-page .pm .t b {
+  flex: 1;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.prepare-page .pm p {
+  color: var(--t2);
+  font-size: 14px;
+  line-height: 1.55;
+  margin-top: 10px;
+  padding-inline-start: 58px;
+}
+
+.prepare-page .c.sm {
+  height: 36px;
+  padding: 0 16px;
+  font-size: 14px;
+  border-radius: 18px;
+}
+
+.prepare-page .c.sm .i {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2.4;
+}
+
+.prepare-page .c.ok2 {
+  color: var(--a);
+}

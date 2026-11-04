@@ -1,0 +1,21 @@
+/* Glisse Liquid Glass Stylesheet */
+@import "glisse/styles.css";
+
+/* Modular Component & System Stylesheets */
+@import "./assets/styles/variables.css";
+@import "./assets/styles/base.css";
+@import "./assets/styles/glass.css";
+
+/* Glisse Theme Bridge to SHAREit Palette & Refraction Tuning */
+:root, [data-theme="dark"] {
+  --lg-fill: var(--a);
+  --lg-tab-selected: var(--a);
+  --lg-on: var(--a);
+  --lg-segment-label: var(--on);
+  --lg-lens-shine: 1.6;
+  --lg-rim-shine: 0.35;
+  --lg-lens: var(--lens);
+  --lg-selection: rgba(255, 255, 255, 0.16);
+  --lg-tab-bend: 0.35;
+  --lg-tab-dispersion: 2.2;
+}

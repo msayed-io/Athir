@@ -1,0 +1,53 @@
+.bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  max-width: 480px;
+  margin: auto;
+  z-index: 10;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+  display: flex;
+  justify-content: center;
+  padding: 0 16px;
+  pointer-events: none;
+}
+
+.bar > * {
+  pointer-events: auto;
+}
+
+.bx {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 1;
+  height: 64px;
+  padding: 10px;
+  padding-inline-start: 22px;
+  border-radius: 32px;
+  font-weight: 600;
+  font-size: 15px;
+  border: none !important;
+}
+
+.bx small {
+  display: block;
+  color: var(--t2);
+  font-weight: 400;
+  font-size: 12px;
+}
+
+/* Remove shiny edge / rim effect from all bottom bars across all pages */
+.bar .bx::after,
+.bx::after,
+.bar > .g::after {
+  display: none !important;
+  content: none !important;
+}
+
+.bar .bx,
+.bx,
+.bar > .g {
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4) !important;
+}

@@ -1,0 +1,18 @@
+{
+  "name": "Athir | أثير",
+  "short_name": "Athir",
+  "description": "تطبيق أثير لنقل وتبادل البيانات والملفات محلياً بدون إنترنت وبسرعة فائقة وخصوصية مطلقة",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "theme_color_accent": "#4592FF",
+  "icons": [
+    {
+      "src": "/assets/aistudio/image_fc0a5fd0.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

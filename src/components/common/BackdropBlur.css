@@ -1,0 +1,41 @@
+.pb {
+  position: fixed;
+  left: 0;
+  right: 0;
+  max-width: 480px;
+  margin: auto;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.pb {
+  top: 0;
+  height: calc(env(safe-area-inset-top, 0px) + 96px);
+}
+
+.pb.b {
+  top: auto;
+  bottom: 0;
+  height: 150px;
+}
+
+.pb i {
+  position: absolute;
+  inset: 0;
+}
+
+.pb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(rgba(0, 0, 0, 0.7), transparent);
+}
+
+.pb.b::after {
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.85), transparent);
+}
+
+.app-container:has(.scan-page) .pb.b,
+body:has(.scan-page) .pb.b {
+  display: none !important;
+}

@@ -1,0 +1,61 @@
+/* ==========================================================================
+   Root Window Lock & Scroll Isolation Engine
+   1. Window-level scroll completely prohibited (Root Window Lock)
+   2. Deterministic height with Android -webkit-fill-available & 100dvh support
+   3. Isolated Scroll Containers (.page-view) with smooth momentum scrolling
+   4. Total scrollbar invisibility on all layout engines
+   ========================================================================== */
+
+/* أولاً: قفل التمرير على مستوى النافذة العامة (Root Window Lock) */
+html,
+body,
+#root,
+.app-container {
+  height: 100vh;
+  height: -webkit-fill-available; /* لضمان الأبعاد الصحيحة على الأندرويد */
+  height: 100dvh;
+  overflow: hidden !important;
+  position: relative;
+  width: 100%;
+}
+
+body {
+  max-width: 480px;
+  margin: 0 auto;
+  background: var(--bg);
+  color: var(--t);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+  touch-action: pan-y;
+}
+
+/* ثانياً: جعل كل صفحة مستقلة بصندوق تمرير خاص بها (Isolated Scroll Containers) */
+.page-view {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  /* تفعيل التمرير العمودي المستقل والناعم داخل هذه الشاشة فقط */
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+  overscroll-behavior-y: contain;
+  /* إخفاء شريط التمرير تماماً من هذا الصندوق المستقل */
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+.page-view::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+
+.page-view::-webkit-scrollbar-track,
+.page-view::-webkit-scrollbar-thumb {
+  display: none !important;
+  background: transparent !important;
+}

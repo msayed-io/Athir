@@ -1,0 +1,249 @@
+/* ScanScreen.css - 100% exact match to scan1.html */
+.scan-page {
+  position: fixed;
+  inset: 0;
+  max-width: 480px;
+  margin: auto;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.scan-page .cam {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  background: radial-gradient(120% 80% at 50% 30%, var(--s), var(--bg));
+}
+
+.scan-page .cam video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.scan-page .fr {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  padding: calc(env(safe-area-inset-top, 0px) + 72px) 0 28px;
+}
+
+.scan-page .vf {
+  position: relative;
+  width: min(60vw, 240px);
+  aspect-ratio: 1;
+  border-radius: 28px;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.5);
+}
+
+.scan-page .vf b {
+  position: absolute;
+  width: 36px;
+  height: 36px;
+  border: 0 solid var(--a);
+}
+
+.scan-page .vf b:nth-child(1) {
+  top: 0;
+  left: 0;
+  border-width: 4px 0 0 4px;
+  border-radius: 28px 0 0 0;
+}
+
+.scan-page .vf b:nth-child(2) {
+  top: 0;
+  right: 0;
+  border-width: 4px 4px 0 0;
+  border-radius: 0 28px 0 0;
+}
+
+.scan-page .vf b:nth-child(3) {
+  bottom: 0;
+  left: 0;
+  border-width: 0 0 4px 4px;
+  border-radius: 0 0 0 28px;
+}
+
+.scan-page .vf b:nth-child(4) {
+  bottom: 0;
+  right: 0;
+  border-width: 0 4px 4px 0;
+  border-radius: 0 0 28px 0;
+}
+
+.scan-page .vf::after {
+  content: "";
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  height: 2px;
+  border-radius: 1px;
+  background: linear-gradient(90deg, transparent, var(--a), transparent);
+  animation: scan-sc 2.6s ease-in-out infinite alternate;
+}
+
+@keyframes scan-sc {
+  from {
+    top: 10%;
+  }
+  to {
+    top: 90%;
+  }
+}
+
+.scan-page .sheet {
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  min-height: 300px;
+  background: var(--s);
+  border-radius: 40px 40px 0 0;
+  padding: 12px 24px calc(env(safe-area-inset-bottom, 0px) + 28px);
+}
+
+.scan-page .gp {
+  display: block;
+  width: 36px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--t3);
+  margin: 0 auto 22px;
+}
+
+.scan-page .sheet h2 {
+  font-size: 20px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.scan-page .rg {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  transition: opacity 0.4s;
+  -webkit-mask: linear-gradient(transparent 22%, #000 50%);
+  mask: linear-gradient(transparent 22%, #000 50%);
+}
+
+.scan-page .rg.off {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.scan-page .rg em {
+  position: absolute;
+  left: 50%;
+  bottom: 70px;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  border: 1px solid rgb(var(--a-rgb) / 0.5);
+  transform: translate(-50%, 50%);
+  animation: scan-rp 4.2s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+}
+
+.scan-page .rg em:nth-of-type(2) {
+  animation-delay: -1.4s;
+}
+
+.scan-page .rg em:nth-of-type(3) {
+  animation-delay: -2.8s;
+}
+
+@keyframes scan-rp {
+  from {
+    width: 64px;
+    height: 64px;
+    opacity: 0.8;
+  }
+  to {
+    width: 470px;
+    height: 470px;
+    opacity: 0;
+  }
+}
+
+.scan-page .sw {
+  position: absolute;
+  left: 50%;
+  bottom: 70px;
+  width: 420px;
+  height: 420px;
+  margin: 0 0 -210px -210px;
+  border-radius: 50%;
+  background: conic-gradient(transparent 0 76%, rgb(var(--a-rgb) / 0.16));
+  -webkit-mask: radial-gradient(circle, #000 18%, transparent 68%);
+  mask: radial-gradient(circle, #000 18%, transparent 68%);
+  animation: scan-sp 3.6s linear infinite;
+}
+
+@keyframes scan-sp {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+.scan-page .cr {
+  position: absolute;
+  left: 50%;
+  bottom: 70px;
+  width: 64px;
+  height: 64px;
+  margin: 0 0 -32px -32px;
+  border-radius: 50%;
+  background: var(--ag);
+  display: grid;
+  place-items: center;
+  color: var(--on);
+}
+
+.scan-page .bl {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--t);
+  opacity: 0;
+  animation: scan-bp 4.2s ease-out infinite;
+}
+
+@keyframes scan-bp {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  12% {
+    opacity: 1;
+    transform: scale(1.3);
+  }
+  22% {
+    transform: scale(1);
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.scan-page .fi {
+  animation: scan-fi 0.5s ease both;
+}
+
+@keyframes scan-fi {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}

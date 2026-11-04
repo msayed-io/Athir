@@ -1,0 +1,6 @@
+{
+  "name": "Athir | أثير",
+  "description": "تطبيق أثير لنقل وتبادل البيانات والملفات محلياً بدون إنترنت وبسرعة فائقة وخصوصية مطلقة",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

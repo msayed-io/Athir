@@ -1,0 +1,26 @@
+.sh {
+  display: flex;
+  justify-content: space-around;
+  margin-top: 4px;
+}
+
+.sh a,
+.sh button {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--t2);
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.sh .ci {
+  width: 56px;
+  height: 56px;
+  border-radius: 28px;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--t);
+}

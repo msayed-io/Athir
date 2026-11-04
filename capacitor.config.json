@@ -1,0 +1,6 @@
+{
+  "appId": "com.athir.datatransfer",
+  "appName": "أثير",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}

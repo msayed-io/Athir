@@ -1,0 +1,115 @@
+.bottom-nav-glisse-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: auto;
+  max-width: 100%;
+}
+
+.bottom-nav-glisse-container .lg-tab-bar {
+  --lg-tab-width: 90px;
+  --lg-tab-height: 54px;
+  --lg-tab-inset: 5px;
+  --lg-tab-selected: var(--a);
+  --lg-fill: var(--a);
+  border-radius: 34px;
+  background-color: var(--glass);
+  -webkit-backdrop-filter: blur(28px) saturate(1.85);
+  backdrop-filter: blur(28px) saturate(1.85);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.45);
+  position: relative;
+}
+
+/* Remove shiny rim/edge effect from bottom navigation bar */
+.bottom-nav-glisse-container .lg-tab-bar::after {
+  display: none !important;
+  content: none !important;
+}
+
+.bottom-nav-glisse-container .lg-tab,
+.bottom-nav-glisse-container .lg-tab-copy {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  gap: 3px;
+}
+
+.bottom-nav-glisse-container .lg-tab-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* Navigation lens specular rim */
+.bottom-nav-glisse-container .lg-tab-lens::after,
+.nav .on::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  opacity: var(--rim, 1);
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.50) 0%,
+    rgba(255, 255, 255, 0.05) 30%,
+    rgba(255, 255, 255, 0.05) 70%,
+    rgba(255, 255, 255, 0.30) 100%
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
+/* Fallback support for older WebViews without composite mask */
+@supports not ((-webkit-mask-composite: xor) or (mask-composite: exclude)) {
+  .bottom-nav-glisse-container .lg-tab-bar::after,
+  .bottom-nav-glisse-container .lg-tab-lens::after,
+  .nav .on::after {
+    display: none;
+  }
+  .bottom-nav-glisse-container .lg-tab-bar {
+    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.45);
+  }
+}
+
+/* Legacy fallback support */
+.nav {
+  display: flex;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 32px;
+  border: none !important;
+  background: var(--glass);
+  position: relative;
+}
+
+.nav a,
+.nav button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 86px;
+  height: 52px;
+  border-radius: 26px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--t2);
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.nav .on {
+  position: relative;
+  background: var(--lens);
+  color: var(--a);
+}
+
+.nav .on:active {
+  background: rgba(255, 255, 255, 0.20);
+}

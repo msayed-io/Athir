@@ -1,0 +1,125 @@
+/* Fixed outer capsule frame: stays strictly fixed and permanently rounded on BOTH left and right */
+.category-tabs-capsule {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  height: 48px;
+  border-radius: 24px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(20px) saturate(1.8);
+  backdrop-filter: blur(20px) saturate(1.8);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+  margin-bottom: 14px;
+  overflow: hidden; /* Clips scrolling content so capsule edges stay permanently curved and rounded */
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+/* Remove shiny edge / rim effect from top category bar in send screen */
+.category-tabs-capsule::after {
+  display: none !important;
+  content: none !important;
+}
+
+@supports not ((-webkit-mask-composite: xor) or (mask-composite: exclude)) {
+  .category-tabs-capsule::after {
+    display: none;
+  }
+  .category-tabs-capsule {
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* Inner scroll area: completely transparent with smooth touch scroll */
+.category-tabs-scroll {
+  width: 100%;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  display: flex;
+  align-items: center;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 6px;
+  box-sizing: border-box;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  white-space: nowrap;
+}
+
+.category-tabs-scroll::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Glisse TabBar exact library styling with genuine liquid glass physics */
+.category-tabs-scroll .lg-tab-bar {
+  --lg-tab-width: 84px;
+  --lg-tab-height: 34px;
+  --lg-tab-inset: 3px;
+  --lg-thumb-inset: 0px;
+  --lg-lens-grow-x: 10px;
+  --lg-lens-grow-y: 4px; /* Lens stays within the capsule frame */
+  --lg-tab-selected: var(--a);
+  --lg-fill: var(--a);
+  --lg-selection: rgba(255, 255, 255, 0.16);
+  --lg-lens: var(--lens);
+  --lg-tab-bend: 0.35;
+  --lg-tab-dispersion: 2.2;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 20px;
+  flex-shrink: 0;
+}
+
+.category-tabs-scroll .lg-tab-lens::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  opacity: var(--rim, 1);
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.50) 0%,
+    rgba(255, 255, 255, 0.05) 30%,
+    rgba(255, 255, 255, 0.05) 70%,
+    rgba(255, 255, 255, 0.30) 100%
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
+/* Remove duplicate inner glass track so there is NO double-bar effect */
+.category-tabs-scroll .lg-tab-bar > .lg-tab-bar-glass {
+  display: none !important;
+}
+
+/* Base inactive tab labels */
+.category-tabs-scroll .lg-tab {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--t2);
+  white-space: nowrap;
+  transition: color 200ms ease;
+}
+
+/* Selected tab styling at rest */
+.category-tabs-scroll .lg-tab[data-selected] {
+  color: var(--a);
+  font-weight: 700;
+}
+
+/* When dragged away (data-away), previously selected tab smoothly returns to muted color */
+.category-tabs-scroll .lg-tab-bar[data-away] .lg-tab[data-selected] {
+  color: var(--t2);
+  font-weight: 500;
+}

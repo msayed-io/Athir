@@ -1,0 +1,70 @@
+/* Page-scoped styles for ReceiveScreen */
+.receive-page {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden !important;
+  box-sizing: border-box;
+  touch-action: pan-y;
+}
+
+.qr-box-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 16px 0 24px;
+  min-height: 240px;
+}
+
+.qr-card {
+  padding: 20px 24px;
+  border-radius: 28px;
+  width: 240px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  transition: transform 0.2s ease, background-color 0.2s ease;
+}
+
+.qr-card:active {
+  transform: scale(0.97);
+}
+
+.qr-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--t);
+}
+
+.qr-header .i {
+  width: 18px;
+  height: 18px;
+}
+
+.qr-graphic-wrap {
+  width: 160px;
+  height: 160px;
+  background: var(--on);
+  border-radius: 18px;
+  padding: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  display: grid;
+  place-items: center;
+}
+
+.qr-svg {
+  width: 100%;
+  height: 100%;
+}
+
+.qr-subtext {
+  font-size: 12px;
+  color: var(--t2);
+  margin: 0;
+  line-height: 1.4;
+}
+
