@@ -72,6 +72,17 @@
             </intent-filter>
         </activity>
 
+        <!-- Shares the installed APK with people who do not have Athir yet. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- Foreground transfer service for background transmission -->
         <service
             android:name=".TransferService"

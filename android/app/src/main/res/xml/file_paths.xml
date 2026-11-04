@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- The installed APK lives under /data/app/.../base.apk; sharing it is how a user
+         sends Athir to someone who does not have it installed yet. -->
+    <root-path name="apk_root" path="." />
+</paths>

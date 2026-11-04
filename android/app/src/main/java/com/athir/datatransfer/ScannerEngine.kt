@@ -194,11 +194,18 @@ class ScannerEngine(private val context: Context) {
     private fun applyWindowLayout(host: FrameLayout) {
         val rect = pendingWindow
         val metrics = host.resources.displayMetrics
+        // Gravity MUST be the absolute TOP|LEFT pair.
+        // FrameLayout's default child gravity is TOP|START, and this app runs in RTL, so
+        // START resolves to the RIGHT edge: the camera window was laid out from the right
+        // while the page's frame sits on the left. That is the misalignment seen on device.
+        val absoluteGravity = android.view.Gravity.TOP or android.view.Gravity.LEFT
+
         if (rect == null) {
             // Sensible default until the page reports its camera window.
             val side = (metrics.widthPixels * 0.6f).toInt()
             host.layoutParams = FrameLayout.LayoutParams(side, side).apply {
-                gravity = android.view.Gravity.CENTER_HORIZONTAL
+                gravity = absoluteGravity
+                leftMargin = (metrics.widthPixels - side) / 2
                 topMargin = (metrics.heightPixels * 0.22f).toInt()
             }
         } else {
@@ -222,6 +229,7 @@ class ScannerEngine(private val context: Context) {
                 (rect.width * d).toInt(),
                 (rect.height * d).toInt()
             ).apply {
+                gravity = absoluteGravity
                 leftMargin = (rect.left * d).toInt() + offsetX
                 topMargin = (rect.top * d).toInt() + offsetY
             }

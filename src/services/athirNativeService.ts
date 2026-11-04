@@ -181,6 +181,7 @@ export interface AthirNativePluginInterface {
     transport: string;
   }>;
   pickDocuments(): Promise<{ items: PickedDocument[]; count: number }>;
+  shareApp(): Promise<{ shared: boolean; apkAttached: boolean }>;
   addListener(eventName: string, listenerFunc: (data: any) => void): Promise<PluginListenerHandle>;
 }
 
@@ -518,6 +519,12 @@ export const athirNativeService = {
   },
 
   // ---- Storage Access Framework picker ----
+
+  /** Opens the real system share sheet with the installed APK attached. */
+  async shareApp(): Promise<{ shared: boolean; apkAttached: boolean }> {
+    requireNative('Sharing the app');
+    return AthirNative.shareApp();
+  },
 
   async pickDocuments(): Promise<PickedDocument[]> {
     requireNative('Document picking');

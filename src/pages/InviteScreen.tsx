@@ -4,6 +4,7 @@ import { RadarVisual } from '../components/common/RadarVisual';
 import { ShareChannels } from '../components/invite/ShareChannels';
 import { Icon } from '../assets/icons/SvgSprite';
 import { useAppNavigation } from '../services/navigationService';
+import { athirNativeService } from '../services/athirNativeService';
 import './InviteScreen.css';
 
 export const InviteScreen: React.FC = () => {
@@ -14,24 +15,49 @@ export const InviteScreen: React.FC = () => {
     document.title = 'دعوة';
   }, []);
 
-  const handleSelectMethod = (method: string) => {
+  const showToast = (message: string) => {
+    setToastMessage(message);
+    setTimeout(() => setToastMessage(null), 2500);
+  };
+
+  const handleSelectMethod = async (method: string) => {
     if (method === 'QR') {
       navigate('receive');
       return;
     }
 
-    if (navigator.share && (method === 'More' || method === 'WhatsApp' || method === 'Facebook' || method === 'Bluetooth')) {
-      navigator
-        .share({
+    // Android WebView does not implement the Web Share API, so sharing is done by the
+    // native layer: a real ACTION_SEND chooser with the installed APK attached. The user
+    // picks WhatsApp / Bluetooth / Nearby Share themselves.
+    if (athirNativeService.isNative()) {
+      try {
+        const result = await athirNativeService.shareApp();
+        if (!result.apkAttached) {
+          showToast('تمت المشاركة كنص فقط — تعذّر إرفاق ملف التطبيق.');
+        }
+      } catch (e) {
+        showToast(
+          e instanceof Error && e.message
+            ? 'تعذّر فتح قائمة المشاركة. تثبيت التطبيق قد يكون مقيدًا على هذا الجهاز.'
+            : 'تعذّر فتح قائمة المشاركة.'
+        );
+      }
+      return;
+    }
+
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      try {
+        await navigator.share({
           title: 'أثير | Athir',
           text: 'قم بتثبيت تطبيق أثير لنقل البيانات والملفات محلياً بأمان وبدون إنترنت وبسرعة فائقة!',
-          url: window.location.href,
-        })
-        .catch(() => {});
-    } else {
-      setToastMessage(`مشاركة التطبيق عبر ${method}`);
-      setTimeout(() => setToastMessage(null), 2500);
+        });
+      } catch {
+        // The user dismissed the sheet: nothing to report.
+      }
+      return;
     }
+
+    showToast('المشاركة تعمل داخل تطبيق أندرويد.');
   };
 
   return (

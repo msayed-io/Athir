@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import androidx.core.content.FileProvider
 import android.provider.OpenableColumns
 import android.util.Log
 import androidx.activity.result.ActivityResult
@@ -461,6 +462,59 @@ class AthirNativePlugin : Plugin() {
     }
 
     // ------------------------------------------------------------------
+    // Invite: send Athir itself to someone who does not have it
+    // ------------------------------------------------------------------
+
+    /**
+     * Real share sheet with the installed APK attached.
+     *
+     * The invite screen used to call `navigator.share`, which the Android WebView does not
+     * implement, and then showed a fake "sharing via X" toast - nothing ever left the app.
+     * This sends the real package file through the system chooser (WhatsApp, Bluetooth,
+     * Nearby Share, mail, ...) and grants read access to that one uri only.
+     */
+    @PluginMethod
+    fun shareApp(call: PluginCall) {
+        try {
+            val apk = java.io.File(context.applicationInfo.sourceDir)
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                putExtra(Intent.EXTRA_SUBJECT, INVITE_SUBJECT)
+                putExtra(Intent.EXTRA_TEXT, INVITE_TEXT)
+            }
+
+            var attached = false
+            if (apk.exists()) {
+                try {
+                    val uri = FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        apk
+                    )
+                    intent.type = "application/vnd.android.package-archive"
+                    intent.putExtra(Intent.EXTRA_STREAM, uri)
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    attached = true
+                } catch (e: Exception) {
+                    Log.d("AthirShare", "APK attach failed: ${e.message}")
+                }
+            }
+            if (!attached) {
+                intent.type = "text/plain"
+            }
+
+            val chooser = Intent.createChooser(intent, INVITE_TITLE).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            val host = activity
+            if (host != null) host.startActivity(chooser) else context.startActivity(chooser)
+            call.resolve(JSObject().put("shared", true).put("apkAttached", attached))
+        } catch (e: Exception) {
+            Log.d("AthirShare", "shareApp failed: ${e.message}")
+            call.reject("SHARE_FAILED: ${e.message}")
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Storage Access Framework document picker
     // ------------------------------------------------------------------
 
@@ -792,6 +846,11 @@ class AthirNativePlugin : Plugin() {
 
     companion object {
         private const val REQUEST_CODE_PERMISSIONS = 1002
+        private const val INVITE_TITLE = "شارك أثير"
+        private const val INVITE_SUBJECT = "أثير | Athir - نقل الملفات بدون إنترنت"
+        private const val INVITE_TEXT =
+            "أثير: تطبيق لنقل الملفات والصور والفيديو بين جهازين قريبين، بدون إنترنت " +
+                "وبتشفير كامل. ثبّت الملف المرفق وابدأ النقل.
         private const val HOTSPOT_DEFAULT_GATEWAY = "192.168.49.1"
 
         @Volatile
