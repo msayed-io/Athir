@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { SearchField } from 'glisse';
 import { HeaderTop } from '../components/common/HeaderTop';
 import { BottomBar } from '../components/common/BottomBar';
@@ -6,7 +6,8 @@ import { CategoryTabs, CategoryType } from '../components/send/CategoryTabs';
 import { FileSelectList } from '../components/send/FileSelectList';
 import { Icon } from '../assets/icons/SvgSprite';
 import { useAppNavigation } from '../services/navigationService';
-import { storageService, CATEGORIZED_FILES } from '../services/storageService';
+import { storageService } from '../services/storageService';
+import { athirNativeService, CatalogItem } from '../services/athirNativeService';
 import { FileTuple } from '../types';
 import './SendScreen.css';
 
@@ -17,64 +18,99 @@ export const SendScreen: React.FC = () => {
     document.title = 'إرسال';
   }, []);
 
-  // Category selection across 6 categories
   const [activeCategory, setActiveCategory] = useState<CategoryType>('apps');
-
-  // Search toggle & query
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
+  const [loading, setLoading] = useState(true);
 
   // Selected items stored by filename -> FileTuple
   const [selectedItemsMap, setSelectedItemsMap] = useState<Map<string, FileTuple>>(() => {
     const initialMap = new Map<string, FileTuple>();
-    // Pre-select first 2 items of default 'apps' category
-    const defaultApps = CATEGORIZED_FILES.apps;
-    if (defaultApps[0]) initialMap.set(defaultApps[0][0], defaultApps[0]);
-    if (defaultApps[1]) initialMap.set(defaultApps[1][0], defaultApps[1]);
+    const stored = storageService.getStoredSelection();
+    if (stored) {
+      stored.forEach((item) => {
+        initialMap.set(item[0], item);
+      });
+    }
     return initialMap;
   });
 
-  // Current category file items
+  const loadCategory = useCallback(async (cat: CategoryType, q?: string) => {
+    setLoading(true);
+    try {
+      const items = await athirNativeService.getMediaCatalog(cat, q);
+      setCatalogItems(items);
+    } catch (e) {
+      console.warn('Error loading catalog:', e);
+      setCatalogItems([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadCategory(activeCategory, searchQuery);
+  }, [activeCategory, searchQuery, loadCategory]);
+
   const categoryFiles: FileTuple[] = useMemo(() => {
-    return CATEGORIZED_FILES[activeCategory] || [];
-  }, [activeCategory]);
+    return catalogItems.map((item) => [
+      item.name,
+      item.sizeMB,
+      item.thumbnail,
+      item.uri,
+      item.id,
+    ]);
+  }, [catalogItems]);
 
-  // Filtered files based on search query
-  const filteredFiles = useMemo(() => {
-    if (!searchQuery.trim()) return categoryFiles;
-    const query = searchQuery.toLowerCase();
-    return categoryFiles.filter(([name]) => name.toLowerCase().includes(query));
-  }, [categoryFiles, searchQuery]);
-
-  // Set of selected filenames for quick check
   const selectedNames = useMemo(() => {
     return new Set(selectedItemsMap.keys());
   }, [selectedItemsMap]);
 
-  // Total selected size in MB
   const totalSelectedMB = useMemo(() => {
     let sum = 0;
     selectedItemsMap.forEach((tuple) => {
       sum += tuple[1];
     });
-    return sum;
+    return Math.round(sum * 10) / 10;
   }, [selectedItemsMap]);
 
-  // Toggle selection for a file item
   const handleToggleFile = (file: FileTuple) => {
     const fileName = file[0];
+    const sizeMB = file[1];
+    const thumb = file[2];
+    const uri = file[3] || '';
+    const id = file[4] || fileName;
+
     setSelectedItemsMap((prev) => {
       const next = new Map(prev);
       if (next.has(fileName)) {
         next.delete(fileName);
+        athirNativeService.updateSelection('remove', {
+          id,
+          name: fileName,
+          sizeMB,
+          sizeBytes: Math.round(sizeMB * 1024 * 1024),
+          uri,
+          mimeType: '*/*',
+          category: activeCategory,
+        });
       } else {
         next.set(fileName, file);
+        athirNativeService.updateSelection('add', {
+          id,
+          name: fileName,
+          sizeMB,
+          sizeBytes: Math.round(sizeMB * 1024 * 1024),
+          uri,
+          mimeType: '*/*',
+          category: activeCategory,
+        });
       }
       return next;
     });
   };
 
-  // Save selected items to Session Storage and navigate to scan screen
   const handleSend = () => {
     if (selectedItemsMap.size === 0) return;
     const selectedList = Array.from(selectedItemsMap.values());
@@ -123,11 +159,17 @@ export const SendScreen: React.FC = () => {
           onChange={setActiveCategory}
         />
 
-        <FileSelectList
-          files={filteredFiles}
-          selectedNames={selectedNames}
-          onToggleFile={handleToggleFile}
-        />
+        {loading ? (
+          <div style={{ textAlign: 'center', padding: '40px', color: 'var(--t2)' }}>
+            جارٍ تحميل ملفات الجهاز…
+          </div>
+        ) : (
+          <FileSelectList
+            files={categoryFiles}
+            selectedNames={selectedNames}
+            onToggleFile={handleToggleFile}
+          />
+        )}
       </main>
 
       <BottomBar>
@@ -153,4 +195,3 @@ export const SendScreen: React.FC = () => {
     </div>
   );
 };
-

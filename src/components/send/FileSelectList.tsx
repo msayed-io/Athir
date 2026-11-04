@@ -25,11 +25,20 @@ export const FileSelectList: React.FC<FileSelectListProps> = ({
   selectedNames,
   onToggleFile,
 }) => {
+  if (files.length === 0) {
+    return (
+      <div className="card" id="L" style={{ padding: '36px 16px', textAlign: 'center' }}>
+        <div style={{ color: 'var(--t2)', fontSize: '14px' }}>لا توجد عناصر في هذا القسم</div>
+      </div>
+    );
+  }
+
   return (
     <div className="card" id="L">
       {files.map((file) => {
         const name = file[0];
         const size = file[1];
+        const thumb = file[2];
         const isSelected = selectedNames.has(name);
         const iconBadge = getFileBadge(name);
 
@@ -39,7 +48,16 @@ export const FileSelectList: React.FC<FileSelectListProps> = ({
             className={`li ${isSelected ? 'sel' : ''}`}
             onClick={() => onToggleFile(file)}
           >
-            <span className="ic">{iconBadge}</span>
+            {thumb ? (
+              <img
+                src={thumb}
+                alt=""
+                className="ic"
+                style={{ objectFit: 'cover', borderRadius: '8px' }}
+              />
+            ) : (
+              <span className="ic">{iconBadge}</span>
+            )}
             <div className="gr">
               <b>{name}</b>
               <small>{size} MB</small>
@@ -53,4 +71,3 @@ export const FileSelectList: React.FC<FileSelectListProps> = ({
     </div>
   );
 };
-

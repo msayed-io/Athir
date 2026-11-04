@@ -1,14 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useAppNavigation } from '../services/navigationService';
 import { storageService } from '../services/storageService';
+import { athirNativeService, TransferProgressEvent } from '../services/athirNativeService';
 import { FileTuple } from '../types';
 import './TransferScreen.css';
-
-const DEFAULT_FILES: FileTuple[] = [
-  ['Athir App', 46.9],
-  ['Velo', 10.4],
-  ['Files Pro', 22.1],
-];
 
 export const TransferScreen: React.FC = () => {
   const { navigate } = useAppNavigation();
@@ -17,26 +12,22 @@ export const TransferScreen: React.FC = () => {
     document.title = 'متصل';
   }, []);
 
-  // 1. Load initial files from sessionStorage.sel or fallback to default
-  const files: FileTuple[] = useMemo(() => {
-    let selFiles: FileTuple[] = DEFAULT_FILES;
-    try {
-      const rawSel = sessionStorage.getItem('sel');
-      if (rawSel) {
-        const parsed = JSON.parse(rawSel);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          selFiles = parsed;
-        }
+  // 1. Load initial files from selection
+  const [files, setFiles] = useState<FileTuple[]>(() => {
+    const sel = storageService.getStoredSelection();
+    if (sel && sel.length > 0) return sel;
+    return [];
+  });
+
+  useEffect(() => {
+    athirNativeService.getSelection().then((res) => {
+      if (res && res.items && res.items.length > 0) {
+        setFiles(res.items.map((i) => [i.name, i.sizeMB, i.thumbnail, i.uri, i.id]));
       }
-    } catch {
-      // Fallback
-    }
-    // Clean up sel as in transfer.html
-    sessionStorage.removeItem('sel');
-    return selFiles;
+    });
   }, []);
 
-  // 2. Load initial messages from sessionStorage.msgs
+  // 2. Chat messages
   const [messages, setMessages] = useState<string[]>(() => {
     try {
       const rawMsgs = sessionStorage.getItem('msgs');
@@ -54,17 +45,10 @@ export const TransferScreen: React.FC = () => {
     return files.reduce((acc, f) => acc + f[1], 0);
   }, [files]);
 
-  const fileOffsets = useMemo(() => {
-    let sum = 0;
-    return files.map((f) => {
-      const current = sum;
-      sum += f[1];
-      return current;
-    });
-  }, [files]);
-
-  // Transfer simulation state
+  // Real transfer state from native events
   const [sentMB, setSentMB] = useState(0);
+  const [speedText, setSpeedText] = useState('');
+  const [completedFileNames, setCompletedFileNames] = useState<Set<string>>(new Set());
   const [run, setRun] = useState(true);
   const [fin, setFin] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -72,15 +56,6 @@ export const TransferScreen: React.FC = () => {
   const [topPbOpacity, setTopPbOpacity] = useState(0);
 
   const menuRef = useRef<HTMLDivElement>(null);
-
-  // Animation Refs
-  const runRef = useRef(true);
-  const finRef = useRef(false);
-  const sentRef = useRef(0);
-  const elRef = useRef(0);
-  const lastRef = useRef(performance.now());
-  const totalRef = useRef(totalMB);
-  totalRef.current = totalMB;
 
   // 3. Scroll opacity listener for top backdrop
   useEffect(() => {
@@ -105,48 +80,37 @@ export const TransferScreen: React.FC = () => {
     return () => document.removeEventListener('click', handleDocClick);
   }, []);
 
-  // 5. Transfer animation loop
+  // 5. Connect native transfer progress and event listeners
   useEffect(() => {
-    lastRef.current = performance.now();
-    let animId: number;
-
-    const tick = (t: number) => {
-      const delta = Math.min((t - lastRef.current) / 1000, 0.1);
-      lastRef.current = t;
-
-      if (runRef.current && !finRef.current) {
-        elRef.current += delta;
-        const el = elRef.current;
-        const tt = totalRef.current;
-
-        // Formula from transfer.html:
-        // v = TT / Math.max(14, TT / 6) * (1 + 0.3 * Math.sin(el * 1.7) + 0.1 * Math.sin(el * 5.3))
-        const base = tt / Math.max(14, tt / 6);
-        const v = base * (1 + 0.3 * Math.sin(el * 1.7) + 0.1 * Math.sin(el * 5.3));
-
-        sentRef.current = Math.min(tt, sentRef.current + v * delta);
-
-        if (sentRef.current >= tt) {
-          finRef.current = true;
-          setFin(true);
-
-          if (files.length > 0) {
-            storageService.addRecentTransfer([
-              files[0][0],
-              `${files[0][1]} MB`,
-              'أُرسل',
-            ]);
-          }
-        }
-
-        setSentMB(sentRef.current);
+    const cleanupProgress = athirNativeService.onTransferProgress((e: TransferProgressEvent) => {
+      setSentMB(e.sentMB);
+      setSpeedText(e.speedDisplay);
+      if (e.percent >= 100) {
+        setFin(true);
       }
+    });
 
-      animId = requestAnimationFrame(tick);
+    const cleanupComplete = athirNativeService.onTransferComplete(() => {
+      setFin(true);
+      setRun(false);
+      if (files.length > 0) {
+        storageService.addRecentTransfer([
+          files[0][0],
+          `${files[0][1]} MB`,
+          'أُرسل',
+        ]);
+      }
+    });
+
+    const cleanupChat = athirNativeService.onChatMessage((data) => {
+      setMessages((prev) => [...prev, data.message]);
+    });
+
+    return () => {
+      cleanupProgress();
+      cleanupComplete();
+      cleanupChat();
     };
-
-    animId = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(animId);
   }, [files]);
 
   // 6. Action button state
@@ -168,20 +132,26 @@ export const TransferScreen: React.FC = () => {
       } catch {
         // Ignore
       }
+      athirNativeService.sendChatMessage(text);
       setTxText('');
       setTimeout(() => {
         window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
       }, 50);
     } else if (actionState === 'stop') {
-      runRef.current = false;
+      athirNativeService.pauseTransfer();
       setRun(false);
     } else if (actionState === 'play') {
-      runRef.current = true;
+      athirNativeService.resumeTransfer();
       setRun(true);
     }
   };
 
-  const overallPercent = totalMB > 0 ? (sentMB / totalMB) * 100 : 0;
+  const handleClose = () => {
+    athirNativeService.cancelTransfer();
+    navigate('home');
+  };
+
+  const overallPercent = totalMB > 0 ? Math.min(100, (sentMB / totalMB) * 100) : fin ? 100 : 0;
 
   // Helper to generate the 5 glass blur backdrop layers
   const renderBackdropLayers = (direction: 'top' | 'bottom') => {
@@ -220,14 +190,14 @@ export const TransferScreen: React.FC = () => {
           type="button"
           className="g c ci"
           aria-label="إغلاق"
-          onClick={() => navigate('home')}
+          onClick={handleClose}
         >
           <svg className="i">
             <use href="#x" />
           </svg>
         </button>
         <div className="g c">
-          <i className="dot"></i>متصل · SmartTV
+          <i className="dot"></i>متصل · نقل مشفّر
         </div>
         <div className="g c ci">{files.length}</div>
       </header>
@@ -246,9 +216,11 @@ export const TransferScreen: React.FC = () => {
           <b id="pc">{Math.floor(overallPercent)}%</b>
           <span id="mb">
             {fin
-              ? 'اكتمل'
+              ? 'اكتمل النقل'
               : run
-              ? `${sentMB.toFixed(1)} / ${totalMB.toFixed(1)} MB`
+              ? speedText
+                ? `${sentMB.toFixed(1)} / ${totalMB.toFixed(1)} MB (${speedText})`
+                : `${sentMB.toFixed(1)} / ${totalMB.toFixed(1)} MB`
               : 'متوقف مؤقتًا'}
           </span>
         </div>
@@ -256,29 +228,33 @@ export const TransferScreen: React.FC = () => {
         <div className="h2">الملفات</div>
 
         <div className="card" id="L">
-          {files.map((file, i) => {
-            const fileName = file[0];
-            const fileSize = file[1];
-            const offset = fileOffsets[i];
-            const q = Math.max(0, Math.min(1, (sentMB - offset) / fileSize));
-            const isComplete = q >= 1;
-            const pctDisplay = isComplete ? '✓' : `${Math.floor(q * 100)}%`;
+          {files.length === 0 ? (
+            <div style={{ padding: '24px', textAlign: 'center', color: 'var(--t2)' }}>
+              لا توجد ملفات قيد النقل
+            </div>
+          ) : (
+            files.map((file, i) => {
+              const fileName = file[0];
+              const fileSize = file[1];
+              const isComplete = fin || completedFileNames.has(fileName) || overallPercent >= 100;
+              const pctDisplay = isComplete ? '✓' : `${Math.floor(overallPercent)}%`;
 
-            return (
-              <div key={`${fileName}-${i}`} className="li">
-                <span className="ic">{fileName.slice(0, 2)}</span>
-                <div className="gr">
-                  <b>{fileName}</b>
-                  <div className="tr s">
-                    <i style={{ width: `${q * 100}%` }}></i>
+              return (
+                <div key={`${fileName}-${i}`} className="li">
+                  <span className="ic">{fileName.slice(0, 2).toUpperCase()}</span>
+                  <div className="gr">
+                    <b>{fileName}</b>
+                    <div className="tr s">
+                      <i style={{ width: `${isComplete ? 100 : overallPercent}%` }}></i>
+                    </div>
                   </div>
+                  <small className={`st ${isComplete ? 'ok' : ''}`}>
+                    {pctDisplay}
+                  </small>
                 </div>
-                <small className={`st ${isComplete ? 'ok' : ''}`}>
-                  {pctDisplay}
-                </small>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
         </div>
 
         <div className="ms" id="ms">

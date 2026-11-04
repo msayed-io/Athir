@@ -7,7 +7,7 @@ import { useAppNavigation } from '../services/navigationService';
 import './InviteScreen.css';
 
 export const InviteScreen: React.FC = () => {
-  const { goBack } = useAppNavigation();
+  const { navigate, goBack } = useAppNavigation();
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   React.useEffect(() => {
@@ -15,17 +15,21 @@ export const InviteScreen: React.FC = () => {
   }, []);
 
   const handleSelectMethod = (method: string) => {
-    // If Web Share API is available (e.g. on mobile/Capacitor)
-    if (navigator.share && (method === 'More' || method === 'WhatsApp' || method === 'Facebook')) {
+    if (method === 'QR') {
+      navigate('receive');
+      return;
+    }
+
+    if (navigator.share && (method === 'More' || method === 'WhatsApp' || method === 'Facebook' || method === 'Bluetooth')) {
       navigator
         .share({
           title: 'أثير | Athir',
-          text: 'قم بتنزيل تطبيق أثير لنقل البيانات والملفات محلياً بأمان وبدون إنترنت!',
+          text: 'قم بتثبيت تطبيق أثير لنقل البيانات والملفات محلياً بأمان وبدون إنترنت وبسرعة فائقة!',
           url: window.location.href,
         })
         .catch(() => {});
     } else {
-      setToastMessage(`تم تفعيل خيار مشاركة: ${method}`);
+      setToastMessage(`مشاركة التطبيق عبر ${method}`);
       setTimeout(() => setToastMessage(null), 2500);
     }
   };

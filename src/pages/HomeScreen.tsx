@@ -1,18 +1,29 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { HeaderTop } from '../components/common/HeaderTop';
 import { RadarVisual } from '../components/common/RadarVisual';
 import { BottomNav } from '../components/common/BottomNav';
 import { Icon } from '../assets/icons/SvgSprite';
 import { useAppNavigation } from '../services/navigationService';
 import { storageService } from '../services/storageService';
+import { athirNativeService, HistoryItem } from '../services/athirNativeService';
+import { RecentTuple } from '../types';
 import './HomeScreen.css';
 
 export const HomeScreen: React.FC = () => {
   const { navigate } = useAppNavigation();
-  const recentItems = storageService.getRecentTransfers();
+  const [recentItems, setRecentItems] = useState<RecentTuple[]>([]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     document.title = 'الرئيسية';
+    athirNativeService.getTransferHistory().then((records: HistoryItem[]) => {
+      if (records && records.length > 0) {
+        setRecentItems(records.slice(0, 5).map((r) => [r.fileName, r.fileSizeDisplay, r.direction]));
+      } else {
+        setRecentItems(storageService.getRecentTransfers().slice(0, 5));
+      }
+    }).catch(() => {
+      setRecentItems(storageService.getRecentTransfers().slice(0, 5));
+    });
   }, []);
 
   return (
@@ -59,7 +70,7 @@ export const HomeScreen: React.FC = () => {
         <button
           type="button"
           className="card li"
-          style={{ marginTop: '12px', width: '100%', textAlign: 'start' }}
+          style={{ marginTop: '12px', width: '100%', textAlign: 'start', cursor: 'pointer' }}
           onClick={() => navigate('send')}
         >
           <span className="ic">
@@ -67,36 +78,42 @@ export const HomeScreen: React.FC = () => {
           </span>
           <div className="gr">
             <b>الملفات</b>
-            <small>تصفّح ملفات جهازك</small>
+            <small>تصفّح ملفات جهازك الحقيقية</small>
           </div>
         </button>
 
         <div className="h2">الأخيرة</div>
 
         <div className="card" id="rec">
-          {recentItems.map((item, idx) => {
-            const name = item[0];
-            const size = item[1];
-            const status = item[2];
-            const iconText = name.slice(0, 2);
+          {recentItems.length === 0 ? (
+            <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--t2)', fontSize: '13px' }}>
+              لا توجد عمليات نقل حديثة
+            </div>
+          ) : (
+            recentItems.map((item, idx) => {
+              const name = item[0];
+              const size = item[1];
+              const status = item[2];
+              const iconText = name.slice(0, 2).toUpperCase();
 
-            return (
-              <div
-                key={`${name}-${idx}`}
-                className="li"
-                style={{ cursor: 'pointer' }}
-                onClick={() => navigate('history')}
-              >
-                <span className="ic">{iconText}</span>
-                <div className="gr">
-                  <b>{name}</b>
-                  <small>
-                    {size} · {status}
-                  </small>
+              return (
+                <div
+                  key={`${name}-${idx}`}
+                  className="li"
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => navigate('history')}
+                >
+                  <span className="ic">{iconText}</span>
+                  <div className="gr">
+                    <b>{name}</b>
+                    <small>
+                      {size} · {status}
+                    </small>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
         </div>
       </main>
 

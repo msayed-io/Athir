@@ -4,6 +4,7 @@ import { BottomBar } from '../components/common/BottomBar';
 import { RadarVisual } from '../components/common/RadarVisual';
 import { Icon } from '../assets/icons/SvgSprite';
 import { useAppNavigation } from '../services/navigationService';
+import { athirNativeService, ReceiveSession, DiscoveredPeer } from '../services/athirNativeService';
 import './ReceiveScreen.css';
 
 export const ReceiveScreen: React.FC = () => {
@@ -13,25 +14,66 @@ export const ReceiveScreen: React.FC = () => {
     document.title = 'استلام';
   }, []);
 
-  // Discovery simulation timer
-  const [isDiscovered, setIsDiscovered] = useState(false);
-  const [showQrInline, setShowQrInline] = useState(false);
+  const [session, setSession] = useState<ReceiveSession | null>(null);
+  const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
+  const [discoveredPeer, setDiscoveredPeer] = useState<DiscoveredPeer | null>(null);
+  const [showQrInline, setShowQrInline] = useState(true);
+  const [statusText, setStatusText] = useState('جارٍ بدء وضع الاستلام…');
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setIsDiscovered(true);
-    }, 4500);
+    let unmounted = false;
 
-    return () => clearTimeout(timer);
-  }, []);
+    // Start receiver server and local advertising
+    athirNativeService.startReceiving().then(async (s) => {
+      if (!unmounted) {
+        setSession(s);
+        setStatusText('في انتظار المرسل');
+
+        if (s.qrDataUrl) {
+          setQrCodeUrl(s.qrDataUrl);
+        } else if (s.qrPayload) {
+          const generated = await athirNativeService.generateQrCode(s.qrPayload);
+          if (!unmounted) {
+            setQrCodeUrl(generated);
+          }
+        }
+      }
+    }).catch((err) => {
+      if (!unmounted) {
+        setStatusText('فشل بدء الاستلام: ' + err);
+      }
+    });
+
+    // Listen for incoming connection or discovered peer
+    const cleanupPeer = athirNativeService.onDeviceDiscovered((peer) => {
+      if (!unmounted) {
+        setDiscoveredPeer(peer);
+      }
+    });
+
+    const cleanupProgress = athirNativeService.onTransferProgress(() => {
+      if (!unmounted) {
+        navigate('transfer');
+      }
+    });
+
+    return () => {
+      unmounted = true;
+      cleanupPeer();
+      cleanupProgress();
+      athirNativeService.stopReceiving();
+    };
+  }, [navigate]);
 
   const handleAction = () => {
-    if (isDiscovered) {
+    if (discoveredPeer) {
       navigate('transfer');
     } else {
       setShowQrInline((prev) => !prev);
     }
   };
+
+  const displayName = session?.displayName || 'أثير';
 
   return (
     <div className="page-view receive-page">
@@ -49,38 +91,60 @@ export const ReceiveScreen: React.FC = () => {
 
       <main>
         {showQrInline ? (
-          <div className="qr-box-container">
+          <div className="qr-box-container" style={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
             <div
               className="g qr-card"
-              onClick={() => {
-                setIsDiscovered(true);
-                navigate('transfer');
+              style={{
+                background: 'var(--card-bg, rgba(255, 255, 255, 0.06))',
+                border: '1px solid rgba(255, 255, 255, 0.12)',
+                borderRadius: '20px',
+                padding: '20px',
+                maxWidth: '320px',
+                width: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                boxShadow: '0 12px 32px rgba(0,0,0,0.3)',
               }}
-              title="انقر للاتصال المباشر"
             >
-              <div className="qr-header">
+              <div className="qr-header" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', fontWeight: 600 }}>
                 <Icon name="qr" />
                 <span>رمز الاستلام السريع</span>
               </div>
-              <div className="qr-graphic-wrap">
-                <svg viewBox="0 0 100 100" className="qr-svg">
-                  <rect x="10" y="10" width="25" height="25" fill="var(--bg)" />
-                  <rect x="15" y="15" width="15" height="15" fill="var(--on)" />
-                  <rect x="19" y="19" width="7" height="7" fill="var(--bg)" />
-                  <rect x="65" y="10" width="25" height="25" fill="var(--bg)" />
-                  <rect x="70" y="15" width="15" height="15" fill="var(--on)" />
-                  <rect x="74" y="19" width="7" height="7" fill="var(--bg)" />
-                  <rect x="10" y="65" width="25" height="25" fill="var(--bg)" />
-                  <rect x="15" y="70" width="15" height="15" fill="var(--on)" />
-                  <rect x="19" y="74" width="7" height="7" fill="var(--bg)" />
-                  <rect x="45" y="15" width="10" height="20" fill="var(--bg)" />
-                  <rect x="40" y="45" width="20" height="10" fill="var(--bg)" />
-                  <rect x="45" y="65" width="15" height="15" fill="var(--bg)" />
-                  <rect x="65" y="45" width="20" height="15" fill="var(--bg)" />
-                  <rect x="75" y="75" width="15" height="15" fill="var(--bg)" />
-                </svg>
+              <div
+                className="qr-graphic-wrap"
+                style={{
+                  width: '220px',
+                  height: '220px',
+                  borderRadius: '16px',
+                  background: '#ffffff',
+                  padding: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
+                }}
+              >
+                {qrCodeUrl ? (
+                  <img
+                    src={qrCodeUrl}
+                    alt="رمز الاستلام السريع"
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'contain',
+                      borderRadius: '8px',
+                    }}
+                  />
+                ) : (
+                  <div style={{ color: '#666666', fontSize: '13px', textAlign: 'center' }}>
+                    جارٍ توليد الرمز المشفّر…
+                  </div>
+                )}
               </div>
-              <p className="qr-subtext">امسح الرمز أو انقر للاتصال المباشر</p>
+              <p className="qr-subtext" style={{ marginTop: '14px', fontSize: '12px', color: 'var(--t2)', textAlign: 'center' }}>
+                امسح الرمز من جهاز المرسل للربط المباشر
+              </p>
             </div>
           </div>
         ) : (
@@ -90,22 +154,22 @@ export const ReceiveScreen: React.FC = () => {
         <h1 id="h">
           {showQrInline
             ? 'رمز QR جاهز للمسح'
-            : isDiscovered
-            ? 'تم العثور على SmartTV'
+            : discoveredPeer
+            ? `تم العثور على ${discoveredPeer.peerName}`
             : 'في انتظار المرسل'}
         </h1>
         <p className="sub" id="sb">
           {showQrInline
             ? 'امسح الرمز من جهاز المرسل للربط المباشر'
-            : isDiscovered
+            : discoveredPeer
             ? 'اضغط اتصال للبدء'
             : 'افتح الإرسال على الجهاز الآخر'}
         </p>
 
-        <div style={{ display: 'flex', justifyContent: 'center', marginTop: '24px' }}>
-          <div className="g c">
+        <div style={{ display: 'flex', justifyContent: 'center', marginTop: '20px' }}>
+          <div className="g c" style={{ padding: '6px 14px', borderRadius: '20px', background: 'rgba(255,255,255,0.08)', fontSize: '13px' }}>
             <i className="dot" />
-            user79109045681
+            {displayName}
           </div>
         </div>
       </main>
@@ -114,10 +178,10 @@ export const ReceiveScreen: React.FC = () => {
         <div className="g bx">
           <span id="st">
             {showQrInline
-              ? 'جاهز للمسح'
-              : isDiscovered
-              ? 'SmartTV'
-              : 'جارٍ البحث…'}
+              ? 'رمز QR نشط'
+              : discoveredPeer
+              ? discoveredPeer.peerName
+              : statusText}
           </span>
           <button
             type="button"
@@ -125,12 +189,10 @@ export const ReceiveScreen: React.FC = () => {
             id="btn"
             onClick={handleAction}
           >
-            {isDiscovered ? 'اتصال' : 'QR'}
+            {discoveredPeer ? 'اتصال' : showQrInline ? 'رادار' : 'QR'}
           </button>
         </div>
       </BottomBar>
     </div>
   );
 };
-
-

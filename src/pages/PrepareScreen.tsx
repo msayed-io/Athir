@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Switch } from 'glisse';
 import { HeaderTop } from '../components/common/HeaderTop';
 import { BottomBar } from '../components/common/BottomBar';
 import { Icon } from '../assets/icons/SvgSprite';
 import { useAppNavigation } from '../services/navigationService';
+import { athirNativeService } from '../services/athirNativeService';
 import './PrepareScreen.css';
 
 export const PrepareScreen: React.FC = () => {
@@ -15,6 +16,38 @@ export const PrepareScreen: React.FC = () => {
 
   const [perm1Granted, setPerm1Granted] = useState(false);
   const [perm2Granted, setPerm2Granted] = useState(false);
+  const [sdkVersion, setSdkVersion] = useState(36);
+
+  const checkPerms = useCallback(async () => {
+    const status = await athirNativeService.checkPermissions();
+    setPerm1Granted(status.nearbyGranted);
+    setPerm2Granted(status.mediaGranted);
+    setSdkVersion(status.sdkInt);
+  }, []);
+
+  useEffect(() => {
+    checkPerms();
+  }, [checkPerms]);
+
+  const handleTogglePerm1 = async (val: boolean) => {
+    if (val) {
+      const res = await athirNativeService.requestPermissions();
+      setPerm1Granted(res.nearbyGranted);
+      setPerm2Granted(res.mediaGranted);
+    } else {
+      setPerm1Granted(false);
+    }
+  };
+
+  const handleTogglePerm2 = async (val: boolean) => {
+    if (val) {
+      const res = await athirNativeService.requestPermissions();
+      setPerm1Granted(res.nearbyGranted);
+      setPerm2Granted(res.mediaGranted);
+    } else {
+      setPerm2Granted(false);
+    }
+  };
 
   const count = (perm1Granted ? 1 : 0) + (perm2Granted ? 1 : 0);
   const isReady = count === 2;
@@ -62,16 +95,20 @@ export const PrepareScreen: React.FC = () => {
               <span className="ic">
                 <Icon name="pin" />
               </span>
-              <b>منح إذن الموقع</b>
+              <b>{sdkVersion >= 33 ? 'أجهزة Wi-Fi القريبة' : 'منح إذن الموقع'}</b>
               <div dir="ltr" style={{ display: 'inline-flex' }}>
                 <Switch
-                  aria-label="منح إذن الموقع"
+                  aria-label="منح إذن الاتصال القريب"
                   checked={perm1Granted}
-                  onCheckedChange={setPerm1Granted}
+                  onCheckedChange={handleTogglePerm1}
                 />
               </div>
             </div>
-            <p>ابحث عن جهاز قريب قام بتثبيت تطبيق أثير ويمكنك النقل مباشرة إليه.</p>
+            <p>
+              {sdkVersion >= 33
+                ? 'إذن الاتصال بالأجهزة القريبة بدون الحاجة للوصول إلى موقعك الجغرافي.'
+                : 'ابحث عن جهاز قريب قام بتثبيت تطبيق أثير ويمكنك النقل مباشرة إليه.'}
+            </p>
           </div>
 
           <div className="pm">
@@ -79,16 +116,20 @@ export const PrepareScreen: React.FC = () => {
               <span className="ic">
                 <Icon name="gps" />
               </span>
-              <b>تشغيل نظام تحديد المواقع العالمي</b>
+              <b>{sdkVersion >= 33 ? 'الوصول للوسائط والملفات' : 'الوصول لوحدة التخزين'}</b>
               <div dir="ltr" style={{ display: 'inline-flex' }}>
                 <Switch
-                  aria-label="تشغيل نظام تحديد المواقع"
+                  aria-label="تشغيل أذونات التخزين والوسائط"
                   checked={perm2Granted}
-                  onCheckedChange={setPerm2Granted}
+                  onCheckedChange={handleTogglePerm2}
                 />
               </div>
             </div>
-            <p>بالنسبة لأندرويد 6.0 فما فوق، تحتاج إلى تمكين خدمات الموقع لتحديد موقع أصدقائك</p>
+            <p>
+              {sdkVersion >= 33
+                ? 'منح الوصول للصور والفيديو والموسيقى والتطبيقات لتتمكن من إرسالها واستلامها.'
+                : 'تمكين الوصول لوحدة التخزين لنقل واستلام الملفات بأمان وسرعة.'}
+            </p>
           </div>
         </div>
       </main>

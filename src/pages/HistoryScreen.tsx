@@ -1,25 +1,50 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { HeaderTop } from '../components/common/HeaderTop';
 import { BottomNav } from '../components/common/BottomNav';
 import { Icon } from '../assets/icons/SvgSprite';
 import { useAppNavigation } from '../services/navigationService';
 import { storageService } from '../services/storageService';
+import { athirNativeService, HistoryItem } from '../services/athirNativeService';
+import { RecentTuple } from '../types';
 import './HistoryScreen.css';
 
 export const HistoryScreen: React.FC = () => {
   const { goBack } = useAppNavigation();
-  const [items, setItems] = useState(() => storageService.getRecentTransfers());
+  const [items, setItems] = useState<RecentTuple[]>([]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     document.title = 'السجل';
   }, []);
 
-  const handleClear = () => {
+  const loadHistory = useCallback(async () => {
     try {
-      localStorage.removeItem('recent_transfers');
+      const nativeRecords: HistoryItem[] = await athirNativeService.getTransferHistory();
+      if (nativeRecords && nativeRecords.length > 0) {
+        const tuples: RecentTuple[] = nativeRecords.map((r) => [
+          r.fileName,
+          r.fileSizeDisplay,
+          r.direction,
+        ]);
+        setItems(tuples);
+        return;
+      }
+    } catch {
+      // Fallback to storage
+    }
+    setItems(storageService.getRecentTransfers());
+  }, []);
+
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
+
+  const handleClear = async () => {
+    try {
+      await athirNativeService.clearTransferHistory();
     } catch {
       // Ignore
     }
+    storageService.clearRecentTransfers();
     setItems([]);
   };
 
@@ -51,6 +76,7 @@ export const HistoryScreen: React.FC = () => {
                   padding: '2px 8px',
                   borderRadius: '10px',
                   background: 'var(--h)',
+                  cursor: 'pointer',
                 }}
                 onClick={handleClear}
               >
@@ -70,7 +96,7 @@ export const HistoryScreen: React.FC = () => {
               const name = item[0];
               const size = item[1];
               const status = item[2];
-              const iconText = name.slice(0, 2);
+              const iconText = name.slice(0, 2).toUpperCase();
 
               return (
                 <div key={`${name}-${idx}`} className="li">
