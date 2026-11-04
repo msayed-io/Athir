@@ -655,7 +655,7 @@ class TransferEngine(private val context: Context) {
 
         private const val CONNECT_TIMEOUT_MS = 8_000
         private const val SOCKET_READ_TIMEOUT_MS = 300_000
-        private const val ACK_TIMEOUT_MS = 20_000
+        private const val ACK_TIMEOUT_MS = 20_000L
         private const val PROGRESS_INTERVAL_MS = 100L
         private const val MAX_FILE_NAME_LENGTH = 180
 

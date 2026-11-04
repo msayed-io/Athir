@@ -426,9 +426,16 @@ class P2pTransportManager(private val context: Context) {
                 Log.d(LOG_TAG, "ensureP2pManager: WIFI_P2P_SERVICE unavailable")
                 return null
             }
-            val channel = manager.initialize(context.applicationContext, Looper.getMainLooper()) { reason ->
-                Log.d(LOG_TAG, "WifiP2p channel disconnected, reason=$reason")
-            }
+            val channel = manager.initialize(
+                context.applicationContext,
+                Looper.getMainLooper(),
+                object : WifiP2pManager.ChannelListener {
+                    override fun onChannelDisconnected() {
+                        Log.d(LOG_TAG, "WifiP2p channel disconnected")
+                        p2pChannel = null
+                    }
+                }
+            )
             p2pManager = manager
             p2pChannel = channel
             manager
