@@ -21,7 +21,26 @@ export const ScanScreen: React.FC = () => {
   const [statusMessage, setStatusMessage] = useState<string>('');
   const [connectError, setConnectError] = useState<string>('');
   const [connecting, setConnecting] = useState(false);
+  const [cameraState, setCameraState] = useState<'idle' | 'preparing' | 'running' | 'error'>('idle');
   const mountedRef = useRef(true);
+  const camWindowRef = useRef<HTMLDivElement | null>(null);
+
+  /** Reports the real on-screen rect of the camera window to the native layer. */
+  const reportCameraWindow = useCallback(() => {
+    const el = camWindowRef.current;
+    if (!el || !athirNativeService.isNative()) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    athirNativeService
+      .setScannerWindow({
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+        density: window.devicePixelRatio || 1,
+      })
+      .catch(() => {});
+  }, []);
 
   const handlePeerFound = useCallback((peer: DiscoveredPeer) => {
     if (!mountedRef.current) return;
@@ -51,6 +70,7 @@ export const ScanScreen: React.FC = () => {
 
   const startCamera = useCallback(async () => {
     try {
+      reportCameraWindow();
       let status = await athirNativeService.checkPermissions().catch(() => null);
       if (status && !status.cameraGranted) {
         // The camera permission is requested here only if the user skipped the
@@ -68,6 +88,7 @@ export const ScanScreen: React.FC = () => {
         }
       }
       await athirNativeService.startScanner();
+      reportCameraWindow();
     } catch (e) {
       if (!mountedRef.current) return;
       const message = e instanceof Error ? e.message : '';
@@ -77,7 +98,7 @@ export const ScanScreen: React.FC = () => {
           : 'تعذّر تشغيل الكاميرا. تحقّق من إذن الكاميرا.'
       );
     }
-  }, [waitForPermissionAnswer]);
+  }, [waitForPermissionAnswer, reportCameraWindow]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -90,9 +111,19 @@ export const ScanScreen: React.FC = () => {
       };
     }
 
-    // The native camera preview is rendered behind the WebView, so the page background has
-    // to step aside while this screen is mounted (see the .scan-live rules in ScanScreen.css).
-    document.body.classList.add('scan-live');
+    const cleanupCameraState = athirNativeService.onCameraState((data) => {
+      if (!mountedRef.current) return;
+      setCameraState(
+        data.state === 'running'
+          ? 'running'
+          : data.state === 'preparing'
+          ? 'preparing'
+          : 'error'
+      );
+      if (data.state === 'error' && data.detail && data.detail !== 'permission') {
+        setStatusMessage(`تعذّر تشغيل الكاميرا: ${data.detail}`);
+      }
+    });
 
     const cleanupScanError = athirNativeService.onScanError((data) => {
       if (!mountedRef.current) return;
@@ -105,6 +136,12 @@ export const ScanScreen: React.FC = () => {
 
     // Native CameraX + ML Kit QR scanning and mDNS discovery.
     void startCamera();
+
+    const onViewportChange = () => reportCameraWindow();
+    window.addEventListener('resize', onViewportChange);
+    window.addEventListener('orientationchange', onViewportChange);
+    // The frame element must be laid out before its rect means anything.
+    const rafId = requestAnimationFrame(() => reportCameraWindow());
     athirNativeService.startDiscovery().catch(() => {
       setStatusMessage('تعذّر بدء اكتشاف الأجهزة القريبة.');
     });
@@ -136,14 +173,17 @@ export const ScanScreen: React.FC = () => {
 
     return () => {
       mountedRef.current = false;
-      document.body.classList.remove('scan-live');
+      cleanupCameraState();
+      cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', onViewportChange);
+      window.removeEventListener('orientationchange', onViewportChange);
       cleanupQr();
       cleanupPeer();
       cleanupScanError();
       athirNativeService.stopScanner().catch(() => {});
       athirNativeService.stopDiscovery().catch(() => {});
     };
-  }, [handlePeerFound, startCamera]);
+  }, [handlePeerFound, startCamera, reportCameraWindow]);
 
   const handleConnect = async () => {
     if (!discoveredPeer || !discoveredPeer.secret || connecting) return;
@@ -211,6 +251,8 @@ export const ScanScreen: React.FC = () => {
               <b />
               <b />
               <b />
+              {/* The native camera preview is positioned exactly over this element. */}
+              <i className="cam-window" ref={camWindowRef} />
             </div>
             <button
               type="button"
@@ -262,7 +304,11 @@ export const ScanScreen: React.FC = () => {
                 ? needsQr
                   ? 'جهاز قريب بدون اقتران'
                   : 'تم العثور على جهاز'
-                : 'البحث عن مستلمين…'}
+                : cameraState === 'error'
+                ? 'الكاميرا غير متاحة'
+                : cameraState === 'running'
+                ? 'وجّه الكاميرا نحو رمز QR'
+                : 'جارٍ تشغيل الكاميرا…'}
             </h2>
 
             {isFound && discoveredPeer && (

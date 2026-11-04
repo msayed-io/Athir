@@ -252,22 +252,17 @@
 }
 
 /* ==========================================================================
-   Live camera window (v1.0.4)
-   While the scan screen is mounted the native CameraX PreviewView sits behind the WebView.
-   The page therefore has to be transparent so the frames show through, while the sheet,
-   the header and the scan frame stay exactly as designed.
+   Native camera window (v1.0.5)
+   The CameraX preview is a native view placed on top of the WebView, exactly over
+   .cam-window. Its rect is measured here and reported to the native layer, so nothing
+   depends on WebView transparency any more.
    ========================================================================== */
-body.scan-live,
-body.scan-live #root,
-body.scan-live .app-container,
-body.scan-live .scan-page,
-body.scan-live .scan-page .cam {
-  background: transparent !important;
-}
-
-/* The preview repaints every camera frame; a backdrop blur above it would re-raster
-   30 times a second. The scrim gradient alone keeps the header readable. */
-body.scan-live .pb i {
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
+.scan-page .vf .cam-window {
+  position: absolute;
+  inset: 6px;
+  border-radius: 22px;
+  /* Transparent: the native preview is drawn above the WebView. If it cannot start, the
+     designed gradient stays visible instead of a dead black block. */
+  background: transparent;
+  pointer-events: none;
 }

@@ -39,7 +39,8 @@ export const SendScreen: React.FC = () => {
   });
 
   const loadCategory = useCallback(async (cat: CategoryType, q?: string) => {
-    setLoading(true);
+    // Cached categories render instantly: no spinner, no "loading" flash.
+    setLoading(!athirNativeService.hasCachedCatalog(cat, q));
     setCatalogError('');
     try {
       if (!supported) {
@@ -244,11 +245,27 @@ export const SendScreen: React.FC = () => {
             جارٍ تحميل ملفات الجهاز…
           </div>
         ) : (
-          <FileSelectList
-            files={categoryFiles}
-            selectedNames={selectedNames}
-            onToggleFile={handleToggleFile}
-          />
+          <>
+            <FileSelectList
+              files={categoryFiles}
+              selectedNames={selectedNames}
+              onToggleFile={handleToggleFile}
+            />
+            {activeCategory === 'files' && categoryFiles.length === 0 && (
+              <p
+                style={{
+                  marginTop: '12px',
+                  fontSize: '12.5px',
+                  lineHeight: 1.6,
+                  color: 'var(--t2)',
+                  textAlign: 'center',
+                }}
+              >
+                لا يعرض النظام أي ملف إضافي في هذا التصنيف. استخدم زر «مستندات الجهاز» أعلى
+                الصفحة لاختيار أي ملف من أي مجلد (بما فيها التنزيلات) عبر منتقي النظام.
+              </p>
+            )}
+          </>
         )}
       </main>
 

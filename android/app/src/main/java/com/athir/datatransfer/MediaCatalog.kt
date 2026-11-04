@@ -31,6 +31,66 @@ object MediaCatalog {
         val extra: String? = null
     )
 
+    // ------------------------------------------------------------------
+    // Caching: the send screen used to re-query MediaStore and decode every thumbnail on
+    // each visit, which is what produced the "loading" flash every single time.
+    // ------------------------------------------------------------------
+    private data class CacheEntry(val at: Long, val items: List<CatalogItem>)
+
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, CacheEntry>()
+    private const val CACHE_TTL_MS = 90_000L
+
+    fun invalidateCache() {
+        cache.clear()
+    }
+
+    /** Cached dispatcher used by the plugin. */
+    fun query(context: Context, category: String, query: String?, limit: Int): List<CatalogItem> {
+        val key = "$category|${query ?: ""}|$limit"
+        val now = System.currentTimeMillis()
+        cache[key]?.let { entry ->
+            if (now - entry.at < CACHE_TTL_MS) return entry.items
+        }
+        val items = when (category) {
+            "apps" -> getApps(context, query, limit)
+            "photos" -> getPhotos(context, query, limit)
+            "videos" -> getVideos(context, query, limit)
+            "audio" -> getAudio(context, query, limit)
+            "contacts" -> getContacts(context, query, limit)
+            "files" -> getFiles(context, query, limit)
+            else -> emptyList()
+        }
+        cache[key] = CacheEntry(now, items)
+        return items
+    }
+
+    /** Small, fast thumbnail for any content uri (images, video frames, album art). */
+    private fun thumbFromUri(context: Context, uri: Uri, edge: Int = 96): String? {
+        return try {
+            val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                context.contentResolver.loadThumbnail(uri, Size(edge, edge), null)
+            } else {
+                val retriever = android.media.MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(context, uri)
+                    retriever.frameAtTime ?: retriever.embeddedPicture?.let { bytes ->
+                        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    }
+                } finally {
+                    try {
+                        retriever.release()
+                    } catch (ignored: Exception) {}
+                }
+            } ?: return null
+
+            val stream = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 72, stream)
+            "data:image/jpeg;base64," + Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun drawableToBase64(drawable: Drawable, width: Int = 72, height: Int = 72): String? {
         return try {
             val bitmap = if (drawable is BitmapDrawable && drawable.bitmap != null) {
@@ -156,16 +216,7 @@ object MediaCatalog {
                     val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
                     val sizeMB = Math.round((sizeBytes / (1024.0 * 1024.0)) * 10.0) / 10.0
 
-                    var thumbBase64: String? = null
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        try {
-                            val bmp = context.contentResolver.loadThumbnail(contentUri, Size(96, 96), null)
-                            val stream = ByteArrayOutputStream()
-                            bmp.compress(Bitmap.CompressFormat.JPEG, 75, stream)
-                            thumbBase64 = "data:image/jpeg;base64," + Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
-                        } catch (ignored: Exception) {
-                        }
-                    }
+                    val thumbBase64 = thumbFromUri(context, contentUri)
 
                     items.add(
                         CatalogItem(
@@ -234,7 +285,8 @@ object MediaCatalog {
                             sizeBytes = sizeBytes,
                             uri = contentUri.toString(),
                             mimeType = mime,
-                            category = "videos"
+                            category = "videos",
+                            thumbnail = thumbFromUri(context, contentUri)
                         )
                     )
                 }
@@ -296,6 +348,7 @@ object MediaCatalog {
                             uri = contentUri.toString(),
                             mimeType = mime,
                             category = "audio",
+                            thumbnail = thumbFromUri(context, contentUri),
                             extra = artist
                         )
                     )
@@ -359,61 +412,79 @@ object MediaCatalog {
         return items
     }
 
+    /**
+     * Files tab.
+     *
+     * `MediaStore.Files` alone is not enough: on modern Android it only exposes indexed
+     * media, so PDFs, ZIPs, APKs and downloads were missing entirely (the reported "the
+     * files tab shows nothing"). The query therefore merges every readable collection:
+     * Files + Downloads + Documents, de-duplicated by uri, newest first.
+     *
+     * Nothing outside those collections is reachable without the Storage Access Framework,
+     * which is why the send screen keeps "مستندات الجهاز" as the complete, platform
+     * sanctioned path for arbitrary folders.
+     */
     fun getFiles(context: Context, query: String? = null, limit: Int = 100): List<CatalogItem> {
-        val items = mutableListOf<CatalogItem>()
-        val projection = arrayOf(
-            MediaStore.Files.FileColumns._ID,
-            MediaStore.Files.FileColumns.DISPLAY_NAME,
-            MediaStore.Files.FileColumns.SIZE,
-            MediaStore.Files.FileColumns.MIME_TYPE
-        )
+        val items = LinkedHashMap<String, CatalogItem>()
+        val limitPerCollection = (limit * 2).coerceAtLeast(60)
 
-        var selection = "${MediaStore.Files.FileColumns.SIZE} > 0"
-        var selectionArgs: Array<String>? = null
-        if (!query.isNullOrBlank()) {
-            selection += " AND ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?"
-            selectionArgs = arrayOf("%$query%")
-        }
-
-        val sortOrder = "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"
-
-        try {
-            context.contentResolver.query(
-                MediaStore.Files.getContentUri("external"),
-                projection,
-                selection,
-                selectionArgs,
-                sortOrder
-            )?.use { cursor ->
-                val idCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
-                val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DISPLAY_NAME)
-                val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
-                val mimeCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.MIME_TYPE)
-
-                while (cursor.moveToNext() && items.size < limit) {
-                    val id = cursor.getLong(idCol)
-                    val name = cursor.getString(nameCol) ?: "file_$id"
-                    val sizeBytes = cursor.getLong(sizeCol)
-                    val mime = cursor.getString(mimeCol) ?: "application/octet-stream"
-                    val contentUri = ContentUris.withAppendedId(MediaStore.Files.getContentUri("external"), id)
-                    val sizeMB = Math.round((sizeBytes / (1024.0 * 1024.0)) * 10.0) / 10.0
-
-                    items.add(
-                        CatalogItem(
+        fun collect(uri: Uri, idColumn: String) {
+            val projection = arrayOf(
+                idColumn,
+                MediaStore.Files.FileColumns.DISPLAY_NAME,
+                MediaStore.Files.FileColumns.SIZE,
+                MediaStore.Files.FileColumns.MIME_TYPE,
+                MediaStore.Files.FileColumns.DATE_MODIFIED
+            )
+            var selection = "${MediaStore.Files.FileColumns.SIZE} > 0"
+            var selectionArgs: Array<String>? = null
+            if (!query.isNullOrBlank()) {
+                selection += " AND ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?"
+                selectionArgs = arrayOf("%$query%")
+            }
+            try {
+                context.contentResolver.query(
+                    uri,
+                    projection,
+                    selection,
+                    selectionArgs,
+                    "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"
+                )?.use { cursor ->
+                    val idCol = cursor.getColumnIndexOrThrow(idColumn)
+                    val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DISPLAY_NAME)
+                    val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
+                    val mimeCol = cursor.getColumnIndexOrThrow(MediaStore.Files.FileColumns.MIME_TYPE)
+                    var added = 0
+                    while (cursor.moveToNext() && added < limitPerCollection && items.size < limit) {
+                        val id = cursor.getLong(idCol)
+                        val name = cursor.getString(nameCol) ?: "file_$id"
+                        val sizeBytes = cursor.getLong(sizeCol)
+                        if (sizeBytes <= 0L) continue
+                        val mime = cursor.getString(mimeCol) ?: "application/octet-stream"
+                        val contentUri = ContentUris.withAppendedId(uri, id)
+                        val key = contentUri.toString()
+                        if (items.containsKey(key)) continue
+                        val sizeMB = Math.round((sizeBytes / (1024.0 * 1024.0)) * 10.0) / 10.0
+                        items[key] = CatalogItem(
                             id = "file:$id",
                             name = name,
                             sizeMB = if (sizeMB > 0.0) sizeMB else 0.1,
                             sizeBytes = sizeBytes,
-                            uri = contentUri.toString(),
+                            uri = key,
                             mimeType = mime,
                             category = "files"
                         )
-                    )
+                        added++
+                    }
                 }
+            } catch (ignored: Exception) {
             }
-        } catch (ignored: Exception) {
         }
 
-        return items
+        collect(MediaStore.Files.getContentUri("external"), MediaStore.Files.FileColumns._ID)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            collect(MediaStore.Downloads.EXTERNAL_CONTENT_URI, MediaStore.Downloads._ID)
+        }
+        return items.values.toList()
     }
 }

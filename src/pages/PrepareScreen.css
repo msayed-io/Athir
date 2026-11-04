@@ -57,3 +57,11 @@
 .prepare-page .c.ok2 {
   color: var(--a);
 }
+
+/* Truthful permission state under each switch (v1.0.5) */
+.prepare-page .perm-state {
+  display: block;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--t3);
+}

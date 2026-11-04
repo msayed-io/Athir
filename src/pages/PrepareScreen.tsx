@@ -28,6 +28,14 @@ export const PrepareScreen: React.FC = () => {
   const [status, setStatus] = useState<PermissionStatus>(EMPTY_STATUS);
   const [requesting, setRequesting] = useState(false);
   const [errorText, setErrorText] = useState('');
+  /**
+   * Per-session activation. The OS permission may already be granted (the app asks for it
+   * once at first launch), but this screen is an explicit preparation step: the switches
+   * read "not active" until the user turns them on in THIS visit, and they reset every time
+   * the screen is opened. The real system state is never hidden - it is printed under the
+   * switch, so the screen cannot claim a grant that does not exist.
+   */
+  const [activated, setActivated] = useState({ pair: false, media: false });
 
   const applyStatus = useCallback((next: PermissionStatus) => {
     setStatus(next);
@@ -51,6 +59,11 @@ export const PrepareScreen: React.FC = () => {
     const cleanup = athirNativeService.onPermissionsChanged((next) => {
       applyStatus(next);
       setRequesting(false);
+      // The user just answered the system dialog on this screen: activate what was granted.
+      setActivated({
+        pair: next.nearbyGranted && next.cameraGranted,
+        media: next.mediaGranted,
+      });
     });
     return cleanup;
   }, [checkPerms, applyStatus]);
@@ -67,22 +80,37 @@ export const PrepareScreen: React.FC = () => {
   }, []);
 
   const sdkVersion = status.sdkInt || 33;
-  const perm1Granted = status.nearbyGranted && status.cameraGranted;
-  const perm2Granted = status.mediaGranted;
+  const granted1 = status.nearbyGranted && status.cameraGranted;
+  const granted2 = status.mediaGranted;
+  // What the switch shows: activated in this visit AND actually granted by the system.
+  const perm1Granted = granted1 && activated.pair;
+  const perm2Granted = granted2 && activated.media;
   const count = (perm1Granted ? 1 : 0) + (perm2Granted ? 1 : 0);
-  const isReady = status.supported && status.allGranted;
+  const isReady = status.supported && perm1Granted && perm2Granted;
   const unsupported = !status.supported;
 
   const handleTogglePerm1 = async (val: boolean) => {
-    if (val) {
-      await requestAll();
+    if (!val) {
+      setActivated((prev) => ({ ...prev, pair: false }));
+      return;
     }
+    if (!granted1) {
+      await requestAll();
+      return;
+    }
+    setActivated((prev) => ({ ...prev, pair: true }));
   };
 
   const handleTogglePerm2 = async (val: boolean) => {
-    if (val) {
-      await requestAll();
+    if (!val) {
+      setActivated((prev) => ({ ...prev, media: false }));
+      return;
     }
+    if (!granted2) {
+      await requestAll();
+      return;
+    }
+    setActivated((prev) => ({ ...prev, media: true }));
   };
 
   const handleNext = () => {
@@ -145,6 +173,11 @@ export const PrepareScreen: React.FC = () => {
                 ? 'إذن الاتصال بالأجهزة القريبة بدون الحاجة للوصول إلى موقعك الجغرافي، مع إذن الكاميرا لمسح رمز الاقتران.'
                 : 'ابحث عن جهاز قريب قام بتثبيت تطبيق أثير ويمكنك النقل مباشرة إليه.'}
             </p>
+            <small className="perm-state">
+              {granted1
+                ? 'ممنوح في النظام · يحتاج تفعيلًا في هذه الزيارة'
+                : 'غير ممنوح · اضغط المفتاح لمنحه'}
+            </small>
           </div>
 
           <div className="pm">
@@ -167,6 +200,11 @@ export const PrepareScreen: React.FC = () => {
                 ? 'منح الوصول للصور والفيديو والموسيقى والتطبيقات لتتمكن من إرسالها واستلامها.'
                 : 'تمكين الوصول لوحدة التخزين لنقل واستلام الملفات بأمان وسرعة.'}
             </p>
+            <small className="perm-state">
+              {granted2
+                ? 'ممنوح في النظام · يحتاج تفعيلًا في هذه الزيارة'
+                : 'غير ممنوح · اضغط المفتاح لمنحه'}
+            </small>
           </div>
         </div>
 

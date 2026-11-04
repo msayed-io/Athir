@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { FileTuple } from '../../types';
 import { Icon } from '../../assets/icons/SvgSprite';
 import './FileSelectList.css';
@@ -25,6 +25,44 @@ export const FileSelectList: React.FC<FileSelectListProps> = ({
   selectedNames,
   onToggleFile,
 }) => {
+  /**
+   * Scroll-vs-tap guard.
+   *
+   * On Android WebView a slow drag inside a scroll container can still end in a `click`,
+   * which selected a file the user never meant to tap. A pointer gesture that travelled
+   * more than a few pixels (or lasted longer than a fling) is treated as a scroll and the
+   * click is swallowed.
+   */
+  const gestureRef = useRef<{ x: number; y: number; moved: boolean }>({
+    x: 0,
+    y: 0,
+    moved: false,
+  });
+
+  const onPointerDown = (event: React.PointerEvent) => {
+    gestureRef.current = { x: event.clientX, y: event.clientY, moved: false };
+  };
+
+  const onPointerMove = (event: React.PointerEvent) => {
+    const gesture = gestureRef.current;
+    if (!gesture || gesture.moved) return;
+    if (
+      Math.abs(event.clientX - gesture.x) > 8 ||
+      Math.abs(event.clientY - gesture.y) > 8
+    ) {
+      gesture.moved = true;
+    }
+  };
+
+  const handleRowClick = (file: FileTuple) => {
+    if (gestureRef.current.moved) {
+      // The gesture was a scroll, not a tap.
+      gestureRef.current.moved = false;
+      return;
+    }
+    onToggleFile(file);
+  };
+
   if (files.length === 0) {
     return (
       <div className="card" id="L" style={{ padding: '36px 16px', textAlign: 'center' }}>
@@ -34,7 +72,15 @@ export const FileSelectList: React.FC<FileSelectListProps> = ({
   }
 
   return (
-    <div className="card" id="L">
+    <div
+      className="card"
+      id="L"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerCancel={() => {
+        gestureRef.current.moved = false;
+      }}
+    >
       {files.map((file) => {
         const name = file[0];
         const size = file[1];
@@ -46,7 +92,7 @@ export const FileSelectList: React.FC<FileSelectListProps> = ({
           <div
             key={name}
             className={`li ${isSelected ? 'sel' : ''}`}
-            onClick={() => onToggleFile(file)}
+            onClick={() => handleRowClick(file)}
           >
             {thumb ? (
               <img

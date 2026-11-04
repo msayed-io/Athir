@@ -166,6 +166,13 @@ export interface AthirNativePluginInterface {
   getTransferHistory(): Promise<{ records: HistoryItem[] }>;
   clearTransferHistory(): Promise<{ success: boolean }>;
   startScanner(): Promise<{ scanning: boolean }>;
+  setScannerWindow(options: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    density: number;
+  }): Promise<{ applied: boolean }>;
   stopScanner(): Promise<{ stopped: boolean }>;
   startOfflineTransport(): Promise<OfflineTransportResult>;
   stopOfflineTransport(): Promise<{ success: boolean }>;
@@ -192,6 +199,12 @@ function subscribeNative<T>(eventName: string, callback: (data: T) => void): () 
     handlePromise.then((h) => h.remove()).catch(() => {});
   };
 }
+
+/**
+ * Session cache for the media catalog. The send screen used to re-query MediaStore and
+ * re-decode every thumbnail on each visit, which is what flashed "جارٍ التحميل" every time.
+ */
+const catalogCache = new Map<string, CatalogItem[]>();
 
 export const athirNativeService = {
   isNative(): boolean {
@@ -247,8 +260,24 @@ export const athirNativeService = {
       // No fabrication: a browser has no device media catalog to enumerate.
       return [];
     }
+    const key = `${category}|${query ?? ''}`;
+    const cached = catalogCache.get(key);
+    if (cached) return cached;
+
     const res = await AthirNative.getMediaCatalog({ category, query, limit: 120 });
-    return res?.items ?? [];
+    const items = res?.items ?? [];
+    catalogCache.set(key, items);
+    return items;
+  },
+
+  /** Drops the session catalog cache (after a transfer, or on explicit refresh). */
+  invalidateCatalogCache(): void {
+    catalogCache.clear();
+  },
+
+  /** True when a category is already cached, so the screen can render without a spinner. */
+  hasCachedCatalog(category: CategoryType, query?: string): boolean {
+    return catalogCache.has(`${category}|${query ?? ''}`);
   },
 
   async updateSelection(action: 'add' | 'remove' | 'toggle', item: CatalogItem) {
@@ -389,6 +418,23 @@ export const athirNativeService = {
   onScanError(callback: (data: { error: string }) => void): () => void {
     if (!this.isNative()) return () => {};
     return subscribeNative('scanError', callback);
+  },
+
+  /** preparing | running | error - the real state of the native camera window. */
+  onCameraState(callback: (data: { state: string; detail: string }) => void): () => void {
+    if (!this.isNative()) return () => {};
+    return subscribeNative('cameraState', callback);
+  },
+
+  async setScannerWindow(rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    density: number;
+  }): Promise<void> {
+    if (!this.isNative()) return;
+    await AthirNative.setScannerWindow(rect);
   },
 
   onPermissionsChanged(callback: (status: PermissionStatus) => void): () => void {

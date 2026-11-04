@@ -2,7 +2,6 @@ package com.athir.datatransfer
 
 import android.app.Activity
 import android.content.Intent
-import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
@@ -135,15 +134,10 @@ class AthirNativePlugin : Plugin() {
         val limit = call.getInt("limit") ?: 100
 
         thread {
-            val items: List<MediaCatalog.CatalogItem> = when (category) {
-                "apps" -> MediaCatalog.getApps(context, query, limit)
-                "photos" -> MediaCatalog.getPhotos(context, query, limit)
-                "videos" -> MediaCatalog.getVideos(context, query, limit)
-                "audio" -> MediaCatalog.getAudio(context, query, limit)
-                "contacts" -> MediaCatalog.getContacts(context, query, limit)
-                "files" -> MediaCatalog.getFiles(context, query, limit)
-                else -> emptyList()
-            }
+            // Cached dispatcher: re-entering the send screen no longer re-queries
+            // MediaStore and re-decodes every thumbnail.
+            val items: List<MediaCatalog.CatalogItem> =
+                MediaCatalog.query(context, category, query, limit)
 
             val jsArray = JSArray()
             for (item in items) {
@@ -723,12 +717,6 @@ class AthirNativePlugin : Plugin() {
         val act = activity
         act?.let { host ->
             if (host is androidx.lifecycle.LifecycleOwner) {
-                // Let the native PreviewView behind the WebView show through the page.
-                try {
-                    bridge?.webView?.setBackgroundColor(Color.TRANSPARENT)
-                } catch (e: Exception) {
-                    Log.d("AthirScan", "webview transparency failed: ${e.message}")
-                }
                 scannerEngine?.startScanning(host, host, object : ScannerEngine.ScannerListener {
                     override fun onQrScanned(rawContent: String, parsedPayload: JSONObject?) {
                         val data = JSObject().apply {
@@ -751,7 +739,16 @@ class AthirNativePlugin : Plugin() {
                     }
 
                     override fun onScanError(error: String) {
+                        Log.d("AthirScan", "scanError: $error")
                         notifyListeners("scanError", JSObject().put("error", error))
+                    }
+
+                    override fun onCameraState(state: String, detail: String) {
+                        Log.d("AthirScan", "cameraState=$state detail=$detail")
+                        notifyListeners(
+                            "cameraState",
+                            JSObject().put("state", state).put("detail", detail)
+                        )
                     }
                 })
                 call.resolve(JSObject().put("scanning", true))
@@ -761,14 +758,35 @@ class AthirNativePlugin : Plugin() {
         } ?: call.reject("Activity is null")
     }
 
+    /**
+     * The scan page reports where its camera window is (CSS px + device pixel ratio) so the
+     * native preview can be placed exactly there, above the WebView.
+     */
+    @PluginMethod
+    fun setScannerWindow(call: PluginCall) {
+        try {
+            val left = call.getFloat("x") ?: 0f
+            val top = call.getFloat("y") ?: 0f
+            val width = call.getFloat("width") ?: 0f
+            val height = call.getFloat("height") ?: 0f
+            val density = call.getFloat("density") ?: 0f
+            if (width <= 0f || height <= 0f) {
+                call.reject("Invalid camera window size")
+                return
+            }
+            scannerEngine?.setWindow(
+                ScannerEngine.WindowRect(left, top, width, height, density),
+                bridge?.webView
+            )
+            call.resolve(JSObject().put("applied", true))
+        } catch (e: Exception) {
+            call.reject("Failed to apply camera window: ${e.message}")
+        }
+    }
+
     @PluginMethod
     fun stopScanner(call: PluginCall) {
         scannerEngine?.stopScanning()
-        try {
-            bridge?.webView?.setBackgroundColor(Color.BLACK)
-        } catch (e: Exception) {
-            Log.d("AthirScan", "webview background restore failed: ${e.message}")
-        }
         call.resolve(JSObject().put("stopped", true))
     }
 
