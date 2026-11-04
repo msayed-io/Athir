@@ -178,7 +178,6 @@ class ScannerEngine(private val context: Context) {
                     (2 * activity.resources.displayMetrics.density).toInt()
                 )
             )
-            host.soundEffectsEnabled = false
 
             root.addView(host) // no index -> on top of the WebView
             hostView = host
