@@ -850,7 +850,7 @@ class AthirNativePlugin : Plugin() {
         private const val INVITE_SUBJECT = "أثير | Athir - نقل الملفات بدون إنترنت"
         private const val INVITE_TEXT =
             "أثير: تطبيق لنقل الملفات والصور والفيديو بين جهازين قريبين، بدون إنترنت " +
-                "وبتشفير كامل. ثبّت الملف المرفق وابدأ النقل.
+                "وبتشفير كامل. ثبّت الملف المرفق وابدأ النقل."
         private const val HOTSPOT_DEFAULT_GATEWAY = "192.168.49.1"
 
         @Volatile
