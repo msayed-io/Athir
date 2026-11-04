@@ -1,41 +1,41 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import './BackdropBlur.css';
+import { useAppNavigation } from '../../services/navigationService';
 
 interface BackdropLayerProps {
   isBottom?: boolean;
 }
 
+/**
+ * Single glass scrim per screen edge.
+ *
+ * This used to be five stacked `backdrop-filter` surfaces per edge (ten in total, always
+ * mounted). Every `backdrop-filter` forces the compositor to snapshot and re-blur the whole
+ * area beneath it whenever anything repaints, so ten of them (plus the blur on every glass
+ * button) saturated the Android WebView compositor and made the entire app janky - even
+ * when the user was only tapping between screens.
+ *
+ * One layer per edge keeps the exact same visual language (a fade into a softly blurred
+ * backdrop) at a fraction of the raster cost, because the mask gradient and the ::after
+ * scrim carry almost all of the perceived effect.
+ */
 const BackdropLayer: React.FC<BackdropLayerProps> = ({ isBottom }) => {
   const direction = isBottom ? 'top' : 'bottom';
-
-  const layers = useMemo(() => {
-    return Array.from({ length: 5 }, (_, k) => {
-      const n = 100 - k * 17;
-      const mask = `linear-gradient(to ${direction}, #000 ${n - 35}%, transparent ${n}%)`;
-      const blur = `blur(${(0.7 * Math.pow(2, k)).toFixed(1)}px)`;
-
-      return {
-        key: k,
-        style: {
-          backdropFilter: blur,
-          WebkitBackdropFilter: blur,
-          maskImage: mask,
-          WebkitMaskImage: mask,
-        } as React.CSSProperties,
-      };
-    });
-  }, [direction]);
+  const mask = `linear-gradient(to ${direction}, #000 45%, transparent 100%)`;
 
   return (
     <div className={`pb ${isBottom ? 'b' : ''}`}>
-      {layers.map((layer) => (
-        <i key={layer.key} style={layer.style} />
-      ))}
+      <i
+        style={{
+          backdropFilter: 'blur(8px)',
+          WebkitBackdropFilter: 'blur(8px)',
+          maskImage: mask,
+          WebkitMaskImage: mask,
+        }}
+      />
     </div>
   );
 };
-
-import { useAppNavigation } from '../../services/navigationService';
 
 export const BackdropBlur: React.FC = () => {
   const { currentScreen } = useAppNavigation();

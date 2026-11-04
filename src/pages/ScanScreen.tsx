@@ -32,6 +32,53 @@ export const ScanScreen: React.FC = () => {
     });
   }, []);
 
+  // Waits for the authoritative post-dialog permission state instead of guessing.
+  const waitForPermissionAnswer = useCallback(
+    () =>
+      new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve();
+        };
+        const cleanup = athirNativeService.onPermissionsChanged(() => finish());
+        setTimeout(finish, 6000);
+      }),
+    []
+  );
+
+  const startCamera = useCallback(async () => {
+    try {
+      let status = await athirNativeService.checkPermissions().catch(() => null);
+      if (status && !status.cameraGranted) {
+        // The camera permission is requested here only if the user skipped the
+        // first-launch batch; the answer is read back from the real system state.
+        await athirNativeService.requestPermissions().catch(() => {});
+        await waitForPermissionAnswer();
+        status = await athirNativeService.checkPermissions().catch(() => null);
+        if (status && !status.cameraGranted) {
+          if (mountedRef.current) {
+            setStatusMessage(
+              'إذن الكاميرا غير ممنوح — لا يمكن مسح رمز QR. فعّله من إعدادات التطبيق ثم أعد المحاولة.'
+            );
+          }
+          return;
+        }
+      }
+      await athirNativeService.startScanner();
+    } catch (e) {
+      if (!mountedRef.current) return;
+      const message = e instanceof Error ? e.message : '';
+      setStatusMessage(
+        message.includes('CAMERA_PERMISSION_REQUIRED')
+          ? 'إذن الكاميرا غير ممنوح — لا يمكن مسح رمز QR.'
+          : 'تعذّر تشغيل الكاميرا. تحقّق من إذن الكاميرا.'
+      );
+    }
+  }, [waitForPermissionAnswer]);
+
   useEffect(() => {
     mountedRef.current = true;
 
@@ -43,10 +90,21 @@ export const ScanScreen: React.FC = () => {
       };
     }
 
-    // Native CameraX + ML Kit QR scanning and mDNS discovery.
-    athirNativeService.startScanner().catch(() => {
-      setStatusMessage('تعذّر تشغيل الكاميرا. تحقّق من إذن الكاميرا.');
+    // The native camera preview is rendered behind the WebView, so the page background has
+    // to step aside while this screen is mounted (see the .scan-live rules in ScanScreen.css).
+    document.body.classList.add('scan-live');
+
+    const cleanupScanError = athirNativeService.onScanError((data) => {
+      if (!mountedRef.current) return;
+      setStatusMessage(
+        data.error.toLowerCase().includes('permission')
+          ? 'إذن الكاميرا غير ممنوح — لا يمكن مسح رمز QR.'
+          : `تعذّر تشغيل الكاميرا: ${data.error}`
+      );
     });
+
+    // Native CameraX + ML Kit QR scanning and mDNS discovery.
+    void startCamera();
     athirNativeService.startDiscovery().catch(() => {
       setStatusMessage('تعذّر بدء اكتشاف الأجهزة القريبة.');
     });
@@ -78,12 +136,14 @@ export const ScanScreen: React.FC = () => {
 
     return () => {
       mountedRef.current = false;
+      document.body.classList.remove('scan-live');
       cleanupQr();
       cleanupPeer();
+      cleanupScanError();
       athirNativeService.stopScanner().catch(() => {});
       athirNativeService.stopDiscovery().catch(() => {});
     };
-  }, [handlePeerFound]);
+  }, [handlePeerFound, startCamera]);
 
   const handleConnect = async () => {
     if (!discoveredPeer || !discoveredPeer.secret || connecting) return;

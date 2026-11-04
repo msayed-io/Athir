@@ -54,23 +54,10 @@ export const TransferScreen: React.FC = () => {
   const [fin, setFin] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [txText, setTxText] = useState('');
-  const [topPbOpacity, setTopPbOpacity] = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
   const supported = athirNativeService.isNative();
 
   const menuRef = useRef<HTMLDivElement>(null);
-
-  // 3. Scroll opacity listener for top backdrop
-  useEffect(() => {
-    const handleScroll = () => {
-      if (document.documentElement.scrollHeight > window.innerHeight + 1) {
-        setTopPbOpacity(Math.min(1, window.scrollY / 28));
-      }
-    };
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    handleScroll();
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
 
   // 4. Close menu on click outside
   useEffect(() => {
@@ -183,37 +170,8 @@ export const TransferScreen: React.FC = () => {
 
   const overallPercent = totalMB > 0 ? Math.min(100, (sentMB / totalMB) * 100) : fin ? 100 : 0;
 
-  // Helper to generate the 5 glass blur backdrop layers
-  const renderBackdropLayers = (direction: 'top' | 'bottom') => {
-    const layers = [];
-    for (let k = 0; k < 5; k++) {
-      const n = 100 - k * 17;
-      const m = `linear-gradient(to ${direction}, #000 ${n - 35}%, transparent ${n}%)`;
-      const blurPx = (0.7 * Math.pow(2, k)).toFixed(1);
-      const filterCss = `blur(${blurPx}px)`;
-      layers.push(
-        <i
-          key={k}
-          style={{
-            backdropFilter: filterCss,
-            WebkitBackdropFilter: filterCss,
-            WebkitMask: m,
-            mask: m,
-          }}
-        />
-      );
-    }
-    return layers;
-  };
-
   return (
     <div className="page-view transfer-page">
-      {/* Top and Bottom Backdrop Blur Layers */}
-      <div className="pb" style={{ opacity: topPbOpacity }}>
-        {renderBackdropLayers('bottom')}
-      </div>
-      <div className="pb b">{renderBackdropLayers('top')}</div>
-
       {/* Top Header */}
       <header className="top">
         <button

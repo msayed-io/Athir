@@ -95,8 +95,6 @@
 .transfer-page .g {
   position: relative;
   background: rgba(60,62,68,.34);
-  -webkit-backdrop-filter: blur(22px) saturate(1.8);
-  backdrop-filter: blur(22px) saturate(1.8);
   box-shadow: 0 8px 20px rgba(0,0,0,.4);
   transition: transform .35s cubic-bezier(.3,1.5,.5,1);
 }

@@ -27,9 +27,12 @@ export const ReceiveScreen: React.FC = () => {
   const [errorText, setErrorText] = useState('');
   const [offlineMode, setOfflineMode] = useState<'lan' | 'hotspot' | 'p2p'>('lan');
   const [offlineBusy, setOfflineBusy] = useState(false);
+  const [qrError, setQrError] = useState('');
+  const [qrAttempt, setQrAttempt] = useState(0);
 
   useEffect(() => {
     let unmounted = false;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
 
     if (!athirNativeService.isNative()) {
       setStatusText('الاستلام الحقيقي متاح داخل تطبيق أندرويد فقط.');
@@ -51,7 +54,12 @@ export const ReceiveScreen: React.FC = () => {
           setQrCodeUrl(s.qrDataUrl);
         } else if (s.qrPayload) {
           const generated = await athirNativeService.generateQrCode(s.qrPayload);
-          if (!unmounted) setQrCodeUrl(generated);
+          if (unmounted) return;
+          if (generated) {
+            setQrCodeUrl(generated);
+          } else {
+            setQrError('لم يُنتج التطبيق رمز QR لهذه الجلسة. أعد المحاولة.');
+          }
         }
       })
       .catch((err) => {
@@ -64,6 +72,15 @@ export const ReceiveScreen: React.FC = () => {
         setStatusText('تعذّر بدء الاستلام');
       });
 
+    // Honest failure surface: an endless "generating" label hides a real problem.
+    watchdog = setTimeout(() => {
+      if (unmounted) return;
+      setQrCodeUrl((current) => {
+        if (!current) setQrError('تأخّر توليد رمز QR بشكل غير متوقع. اضغط لإعادة المحاولة.');
+        return current;
+      });
+    }, 15000);
+
     const cleanupPeer = athirNativeService.onDeviceDiscovered((peer) => {
       if (!unmounted) setDiscoveredPeer(peer);
     });
@@ -74,12 +91,13 @@ export const ReceiveScreen: React.FC = () => {
 
     return () => {
       unmounted = true;
+      if (watchdog) clearTimeout(watchdog);
       cleanupPeer();
       cleanupProgress();
       athirNativeService.stopOfflineTransport().catch(() => {});
       athirNativeService.stopReceiving().catch(() => {});
     };
-  }, [navigate]);
+  }, [navigate, qrAttempt]);
 
   const enableOfflineTransport = async () => {
     if (offlineBusy) return;
@@ -189,6 +207,22 @@ export const ReceiveScreen: React.FC = () => {
                       borderRadius: '8px',
                     }}
                   />
+                ) : qrError ? (
+                  <div style={{ color: '#666666', fontSize: '13px', textAlign: 'center' }}>
+                    <span style={{ display: 'block', marginBottom: '10px' }}>{qrError}</span>
+                    <button
+                      type="button"
+                      className="g c"
+                      style={{ height: '34px', fontSize: '12px', color: '#111', background: '#eee' }}
+                      onClick={() => {
+                        setQrError('');
+                        setQrCodeUrl('');
+                        setQrAttempt((attempt) => attempt + 1);
+                      }}
+                    >
+                      إعادة المحاولة
+                    </button>
+                  </div>
                 ) : (
                   <div style={{ color: '#666666', fontSize: '13px', textAlign: 'center' }}>
                     {errorText ? 'تعذّر توليد الرمز' : 'جارٍ توليد الرمز المشفّر…'}

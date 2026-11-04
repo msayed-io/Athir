@@ -84,6 +84,7 @@
 .scan-page .vf::after {
   content: "";
   position: absolute;
+  top: 10%;
   left: 16px;
   right: 16px;
   height: 2px;
@@ -92,12 +93,14 @@
   animation: scan-sc 2.6s ease-in-out infinite alternate;
 }
 
+/* Animate a composited transform instead of `top`, so the scan line never triggers a
+   layout pass on every frame. */
 @keyframes scan-sc {
   from {
-    top: 10%;
+    transform: translateY(0);
   }
   to {
-    top: 90%;
+    transform: translateY(calc(min(60vw, 240px) * 0.8));
   }
 }
 
@@ -160,15 +163,15 @@
   animation-delay: -2.8s;
 }
 
+/* Width/height would force a layout + paint pass per frame for three rings; scaling the
+   same circle is composited and visually identical (64px -> 470px = scale 7.34). */
 @keyframes scan-rp {
   from {
-    width: 64px;
-    height: 64px;
+    transform: translate(-50%, 50%) scale(1);
     opacity: 0.8;
   }
   to {
-    width: 470px;
-    height: 470px;
+    transform: translate(-50%, 50%) scale(7.34);
     opacity: 0;
   }
 }
@@ -246,4 +249,25 @@
     opacity: 0;
     transform: translateY(8px);
   }
+}
+
+/* ==========================================================================
+   Live camera window (v1.0.4)
+   While the scan screen is mounted the native CameraX PreviewView sits behind the WebView.
+   The page therefore has to be transparent so the frames show through, while the sheet,
+   the header and the scan frame stay exactly as designed.
+   ========================================================================== */
+body.scan-live,
+body.scan-live #root,
+body.scan-live .app-container,
+body.scan-live .scan-page,
+body.scan-live .scan-page .cam {
+  background: transparent !important;
+}
+
+/* The preview repaints every camera frame; a backdrop blur above it would re-raster
+   30 times a second. The scrim gradient alone keeps the header readable. */
+body.scan-live .pb i {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
 }

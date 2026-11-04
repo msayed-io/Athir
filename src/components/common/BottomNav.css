@@ -14,6 +14,8 @@
   --lg-fill: var(--a);
   border-radius: 34px;
   background-color: var(--glass);
+  /* The only surface that keeps a real backdrop blur: it sits over live scrolling content
+     and is small (one bar). Every other blur surface was removed for performance. */
   -webkit-backdrop-filter: blur(28px) saturate(1.85);
   backdrop-filter: blur(28px) saturate(1.85);
   box-shadow: 0 10px 32px rgba(0, 0, 0, 0.45);

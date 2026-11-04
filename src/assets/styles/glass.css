@@ -2,8 +2,9 @@
 .glass {
   position: relative;
   background: var(--glass);
-  -webkit-backdrop-filter: blur(22px) saturate(1.8);
-  backdrop-filter: blur(22px) saturate(1.8);
+  /* No per-element backdrop-filter: the app background is a flat colour, so blurring it
+     produced identical pixels at a large raster cost (one extra blurred surface per
+     button). The rim gradient below carries the glass identity. */
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
   transition: transform 0.22s cubic-bezier(0.25, 1, 0.5, 1), background-color 0.2s ease, opacity 0.2s ease;
 }

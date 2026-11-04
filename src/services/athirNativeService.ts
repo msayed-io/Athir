@@ -385,6 +385,12 @@ export const athirNativeService = {
     return subscribeNative('fileIntegrity', callback);
   },
 
+  /** Real camera/scanner failures (missing permission, camera unavailable, bind failure). */
+  onScanError(callback: (data: { error: string }) => void): () => void {
+    if (!this.isNative()) return () => {};
+    return subscribeNative('scanError', callback);
+  },
+
   onPermissionsChanged(callback: (status: PermissionStatus) => void): () => void {
     if (!this.isNative()) return () => {};
     return subscribeNative('permissionsChanged', (data: PermissionStatus) =>

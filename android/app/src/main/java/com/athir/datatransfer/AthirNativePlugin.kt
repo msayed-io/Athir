@@ -2,6 +2,7 @@ package com.athir.datatransfer
 
 import android.app.Activity
 import android.content.Intent
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
@@ -244,10 +245,13 @@ class AthirNativePlugin : Plugin() {
                 tempSocket.close()
 
                 // Generate ephemeral TLS keypair and self-signed certificate
+                val startedAt = System.currentTimeMillis()
                 val kp = SessionSecurity.generateKeyPair()
                 val cert = SessionSecurity.generateSelfSignedCertificate(kp)
                 val secret = SessionSecurity.generateSessionSecret()
                 val fp = SessionSecurity.getCertificateFingerprint(cert)
+                // Timed so a device log can tell whether a slow QR is crypto or encoding.
+                Log.d("AthirQr", "keypair+certificate in ${System.currentTimeMillis() - startedAt}ms")
 
                 activeKeyPair = kp
                 activeCert = cert
@@ -270,7 +274,12 @@ class AthirNativePlugin : Plugin() {
                 }
                 val qrString = qrObj.toString()
                 activeSession = qrObj
+                val qrStartedAt = System.currentTimeMillis()
                 val qrDataUrl = QrEncoder.generateQrDataUrl(qrString, 512)
+                Log.d(
+                    "AthirQr",
+                    "payload=${qrString.length}B encoded in ${System.currentTimeMillis() - qrStartedAt}ms"
+                )
 
                 // Start advertising via mDNS
                 // The session secret is intentionally NOT advertised over mDNS.
@@ -700,9 +709,27 @@ class AthirNativePlugin : Plugin() {
 
     @PluginMethod
     fun startScanner(call: PluginCall) {
-        activity?.let { act ->
-            if (act is androidx.lifecycle.LifecycleOwner) {
-                scannerEngine?.startScanning(act, object : ScannerEngine.ScannerListener {
+        // A scanner started without the CAMERA permission can only fail silently, which is
+        // exactly what produced the black scan page before. Refuse loudly instead.
+        if (!PermissionCoordinator.isPermissionGranted(
+                context,
+                android.Manifest.permission.CAMERA
+            )
+        ) {
+            Log.d("AthirScan", "startScanner rejected: CAMERA permission is not granted")
+            call.reject("CAMERA_PERMISSION_REQUIRED")
+            return
+        }
+        val act = activity
+        act?.let { host ->
+            if (host is androidx.lifecycle.LifecycleOwner) {
+                // Let the native PreviewView behind the WebView show through the page.
+                try {
+                    bridge?.webView?.setBackgroundColor(Color.TRANSPARENT)
+                } catch (e: Exception) {
+                    Log.d("AthirScan", "webview transparency failed: ${e.message}")
+                }
+                scannerEngine?.startScanning(host, host, object : ScannerEngine.ScannerListener {
                     override fun onQrScanned(rawContent: String, parsedPayload: JSONObject?) {
                         val data = JSObject().apply {
                             put("rawContent", rawContent)
@@ -737,6 +764,11 @@ class AthirNativePlugin : Plugin() {
     @PluginMethod
     fun stopScanner(call: PluginCall) {
         scannerEngine?.stopScanning()
+        try {
+            bridge?.webView?.setBackgroundColor(Color.BLACK)
+        } catch (e: Exception) {
+            Log.d("AthirScan", "webview background restore failed: ${e.message}")
+        }
         call.resolve(JSObject().put("stopped", true))
     }
 
