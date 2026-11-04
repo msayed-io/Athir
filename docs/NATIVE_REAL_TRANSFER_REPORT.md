@@ -172,16 +172,16 @@ android/.../DiscoveryManager.kt:219:  val blockedPrefixes = listOf("tun", "ppp",
 
 | البند | السبب | الأثر |
 |---|---|---|
-| **Wi-Fi Direct (WifiP2pManager)** كناقل | يحتاج إدارة `BroadcastReceiver` لدورة حياة P2P، وتفاوض `connect/group formation`، وإعادة كتابة مسار الاكتشاف بالكامل. تغيير جوهري غير قابل للتحقق منه هنا (لا جهازان، ولا بناء محلي) | النقل يعمل عبر LAN/نقطة الاتصال المشتركة فقط |
-| **LocalOnlyHotspot** (إنشاء نقطة اتصال) | يحتاج `WifiManager.startLocalOnlyHotspot` + معالجة `ON_FAILURE` و`onStopped` وشهادة WPA2 المُولَّدة | لا يمكن النقل بين جهازين بدون راوتر أو نقطة اتصال قائمة |
-| **BLE / Wi-Fi Aware** | كلاهما يحتاج مسار اكتشاف موازٍ واختبارًا على عتاد | mDNS هو مسار الاكتشاف الوحيد |
-| **الاستكمال بعد انقطاع (Resume)** | يحتاج تخزين إزاحة الطرفين (`offset`) وإطار `RESUME_FROM` وتغييرًا في بروتوكول الاستلام | نقل مقطوع = إعادة من البداية |
-| **إطارات PAUSE/RESUME/CANCEL عبر السلك** | معرّفة في البروتوكول؛ الإيقاف المؤقت يُنفَّذ محليًا في المُرسِل فقط | لا يمكن للمستقبِل إيقاف/إلغاء النقل من جهته |
+| **Wi-Fi Direct (WifiP2pManager)** كناقل | **نُفِّذ في v1.0.3** داخل `P2pTransportManager.kt` (`createGroup` + `requestGroupInfo` + `connect` + مستقبِل P2P). لم يُختبر على جهازين حقيقيين (قيد بيئي) | متاح كمسار بديل عند رفض النقطة المحلية؛ سلوكه على العتاد غير مُتحقَّق |
+| **LocalOnlyHotspot** (إنشاء نقطة اتصال) | **نُفِّذ في v1.0.3**: `WifiManager.startLocalOnlyHotspot` (API 26+) مع استخراج SSID وكلمة مرور WPA2 الحقيقية من `WifiConfiguration` وإدخالهما في رمز QR، وانضمام المرسل عبر `WifiNetworkSpecifier` (Q+) أو `WifiConfiguration` (≤P). لم يُختبر على العتاد | نقل بدون راوتر صار ممكنًا برمجيًا؛ التحقق الميداني مطلوب |
+| **BLE / Wi-Fi Aware** | يحتاجان مسار اكتشاف موازٍ واختبارًا على عتاد؛ خارج نطاق v1.0.3 | الاكتشاف عبر mDNS ثم QR للنقل المحلي |
+| **الاستكمال بعد انقطاع (Resume)** | **نُفِّذ في v1.0.3**: `FILE_META` يحمل الاسم والحجم وSHA-256، والمستقبِل يردّ بـ`FILE_ACK` يحمل آخر إزاحة موثوقة، والمرسل يزيح `InputStream` إليها ويبدأ منها، والتقدّم يبدأ من نقطة الاستكمال هذه (بلا تصفير) | الاستكمال يعتمد على بقاء ملف `.part` في `athir_partial`؛ اختبار الانقطاع الفعلي يحتاج جهازين |
+| **إطارات PAUSE/RESUME/CANCEL عبر السلك** | **نُفِّذ في v1.0.3**: قناة تحكّم ثنائية الاتجاه داخل نفس مقبس TLS، يقرأها خيط مستقل على طرف المرسل، وتُعالَج على الطرفين؛ الإلغاء يغلق المقبس بأمان ويُخطر الواجهة فورًا (`transferCancelled`) | الإيقاف/الإلغاء من أي طرف يعمل؛ الاختبار الميداني معلّق |
 | **حوار قبول/رفض للملفات الواردة** | يحتاج شاشة جديدة + إطار بروتوكولي جديد. «هوية التصميم مقفلة» تمنع إضافة شاشة | الموافقة عبر فتح شاشة الاستلام وعرض QR (§3) |
-| **Storage Access Framework للمستندات** | `MediaStore.Files` لا يرى PDF/DOCX على أندرويد 13+ | تصنيف «الملفات» قد يكون ناقصًا على API 33+ |
+| **Storage Access Framework للمستندات** | **نُفِّذ في v1.0.3**: `ACTION_OPEN_DOCUMENT` مع `takePersistableUriPermission` وزر «مستندات الجهاز» في شاشة الإرسال | يمكن اختيار أي مستند (PDF/DOCX/ZIP) وقراءته في الطبقة الأصلية |
 | **MANAGE_EXTERNAL_STORAGE خلف علم بناء** | لم يُطلب لأن المسار الحالي لا يحتاجه؛ إضافته بلا حاجة تخالف سياسة Google Play | لا «كل الملفات» |
 | **AAB / Google Play** | خارج نطاق الأمر | النشر عبر GitHub Releases فقط |
-| **اختبارات آلية (Vitest/Robolectric)** | لا شبكة اختبارات في المشروع، وإضافتها مع تغييرات الأمان في نفس الدفعة تزيد مخاطر البناء | لا حماية انحدار آلية بعد |
+| **اختبارات آلية** | **نُفِّذ في v1.0.3 جزئيًا**: `./gradlew testDebugUnitTest` يعمل في CI بلا عتاد ويغطّي `AthrFrameCodec` (ترميز/فك الإطارات، سقف الحجم، إزاحة الاستكمال، تحويل الهاش) و`PartialFileStore.resumeOffset` (14 اختبارًا). لا Robolectric ولا اختبارات واجهة | لا حماية انحدار لواجهة المستخدم |
 
 ---
 
@@ -218,3 +218,33 @@ android/.../DiscoveryManager.kt:219:  val blockedPrefixes = listOf("tun", "ppp",
 - أي من بنود §7.
 
 > **الادعاء المسموح:** «لم يُعثر على مشكلة في الفحوص المذكورة في §6، وهذه الأمور لم تُتحقَّق: §10.»
+
+
+---
+
+## 11. تحديث v1.0.3 — محرّك النقل بلا راوتر + الاستكمال + قناة التحكّم
+
+هذا القسم يوثّق ما أُضيف بعد v1.0.2. لم يُحذف أي بند من الأقسام السابقة؛ ما تغيّر مُعلَّم صراحةً أعلاه في §7.
+
+### 11.1 ما نُفِّذ (كود حقيقي، لا محاكاة)
+
+| الملف | الإضافة | طبيعة الاستدعاء |
+|---|---|---|
+| `P2pTransportManager.kt` (جديد) | `WifiP2pManager` (group owner عبر `createGroup`+`requestGroupInfo`، وانضمام عبر `connect`)، `WifiManager.startLocalOnlyHotspot` مع SSID/PSK حقيقيين، انضمام المرسل عبر `WifiNetworkSpecifier`/`WifiConfiguration`، مستقبِل بث P2P، `stopAll()` | استدعاءات عتاد فعلية، كلها داخل `try/catch` مع `Log.d(TAG="AthirP2p")` وإرجاع `Result.failure` بدل الانهيار |
+| `PartialFileStore.kt` (جديد) | ملفات `.part` داخل `athir_partial`، `resumeOffset()`، `openAppend()`، `publishToDownloads()` عبر MediaStore (Q+) أو `Downloads/Athir` (أقدم) | قراءة/كتابة ملفات فعلية |
+| `TransferEngine.kt` | بروتوكول الاستكمال (`FILE_META`+`FILE_ACK`+إزاحة)، قناة تحكّم ثنائية الاتجاه (PAUSE/RESUME/CANCEL) بخيط قراءة مستقل، إغلاق آمن، تقدّم بإزاحة أساس، رفع إصدار البروتوكول إلى `0x02` | شبكة TLS حقيقية |
+| `AthrFrameCodec.kt` (جديد) | فصل ترميز الإطارات في كود JVM خالص قابل للاختبار في CI | — |
+| `AthirNativePlugin.kt` | `startOfflineTransport` / `stopOfflineTransport` / `joinOfflineTransport` / `pickDocuments` (+`@ActivityCallback`) وثلاثة أحداث جديدة: `transferResumed`, `transferCancelled`, `transferPaused` | — |
+| `SessionSecurity`/`QrEncoder`/`ReceiveScreen`/`ScanScreen`/`SendScreen`/`TransferScreen`/`athirNativeService` | رمز QR يحمل `transport` + `ssid` + `psk` + `p2pAddr`؛ زر «نقل بدون راوتر»؛ زر «مستندات الجهاز»؛ أزرار إيقاف/إلغاء موصولة بالأحداث الحقيقية وعرض «استُئنف من … MB» | — |
+
+### 11.2 مصفوفة الصلاحيات بعد v1.0.3
+
+`CHANGE_WIFI_STATE`، `ACCESS_WIFI_STATE`، `NEARBY_WIFI_DEVICES` (بعلم `neverForLocation`)، `ACCESS_FINE_LOCATION` و`ACCESS_COARSE_LOCATION` بسقف `maxSdkVersion=32`، `CHANGE_WIFI_MULTICAST_STATE`، `<uses-feature android.hardware.wifi.direct required="false"/>`. لا صلاحية كتابة إلا حتى API 29.
+
+### 11.3 التدهور الآمن عند غياب العتاد
+
+`startOfflineTransport` يجرّب النقطة المحلية أولًا؛ إذا رفضها النظام (لا دعم، أو صلاحية مرفوضة، أو `SecurityException`) يسجّل السبب ويعود إلى Wi-Fi Direct؛ وإذا فشل الاثنان يُرجع الخطأ الصريح `NO_OFFLINE_TRANSPORT: <السبب>` إلى الواجهة. لا نجاح وهمي في أي مسار.
+
+### 11.4 ما يبقى غير مُتحقَّق (يحتاج جهازين حقيقيين)
+
+تشكيل مجموعة Wi-Fi Direct فعليًا، نجاح `startLocalOnlyHotspot` على عتاد حقيقي، زمن الانضمام عبر `WifiNetworkSpecifier`، استكمال نقل كبير بعد قطع الشبكة عمدًا، وسلوك الإلغاء المتزامن من الطرفين. كل هذه مذكورة في §9 وتحتاج تشغيلًا يدويًا.

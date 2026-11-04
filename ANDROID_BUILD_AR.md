@@ -51,3 +51,15 @@ npm run android:open
 - [متطلبات بيئة Capacitor 8](https://capacitorjs.com/docs/getting-started/environment-setup)
 - [دليل تحديث Capacitor 8 ومتطلبات Android](https://capacitorjs.com/docs/updating/8-0)
 - [إصدارات Capacitor المنشورة](https://github.com/ionic-team/capacitor/releases)
+
+
+---
+
+## تحديث v1.0.3
+
+- النقل بلا راوتر: نقطة اتصال محلية (API 26+) مع SSID/كلمة مرور حقيقيين داخل رمز QR، وبديل Wi-Fi Direct.
+- استكمال النقل من آخر بايت موثوق (`FILE_ACK` يحمل الإزاحة) مع التحقق SHA-256 بعد الاستكمال.
+- قناة تحكّم حقيقية: إيقاف/استكمال/إلغاء من أي طرف عبر إطارات داخل نفس مقبس TLS.
+- اختيار المستندات عبر `ACTION_OPEN_DOCUMENT` (SAF) بدل الاعتماد على `MediaStore.Files` وحده.
+- اختبارات CI بلا عتاد: `:app:testDebugUnitTest` (AthrFrameCodec + PartialFileStore).
+- ما يبقى غير مُتحقَّق: أي سلوك لاسلكي فعلي بين جهازين (لا عتاد في بيئة التنفيذ).

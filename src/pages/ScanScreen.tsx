@@ -65,6 +65,10 @@ export const ScanScreen: React.FC = () => {
         secret: data.secret,
         source: 'qr',
         requiresQr: false,
+        transport: (data.transport as 'lan' | 'hotspot' | 'p2p') ?? 'lan',
+        ssid: data.ssid,
+        psk: data.psk,
+        p2pDeviceAddress: data.p2pDeviceAddress,
       });
     });
 
@@ -86,6 +90,19 @@ export const ScanScreen: React.FC = () => {
     setConnectError('');
     setConnecting(true);
     try {
+      // Router-free QR payloads carry the physical link credentials: join first,
+      // then open the encrypted session over the resulting network.
+      const needsOfflineLink =
+        discoveredPeer.transport === 'hotspot' || discoveredPeer.transport === 'p2p';
+      if (needsOfflineLink) {
+        await athirNativeService.joinOfflineTransport({
+          ssid: discoveredPeer.ssid,
+          psk: discoveredPeer.psk,
+          p2pDeviceAddress: discoveredPeer.p2pDeviceAddress,
+        });
+        // Give the platform a moment to complete DHCP/group negotiation.
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
       await athirNativeService.connectAndSend({
         host: discoveredPeer.host,
         port: discoveredPeer.port,

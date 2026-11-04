@@ -48,6 +48,7 @@ export const TransferScreen: React.FC = () => {
   // Real transfer state from native events
   const [sentMB, setSentMB] = useState(0);
   const [speedText, setSpeedText] = useState('');
+  const [resumedFromMB, setResumedFromMB] = useState(0);
   const [completedFileNames, setCompletedFileNames] = useState<Set<string>>(new Set());
   const [run, setRun] = useState(true);
   const [fin, setFin] = useState(false);
@@ -106,6 +107,21 @@ export const TransferScreen: React.FC = () => {
       setRun(false);
     });
 
+    // Control channel: resume offsets, peer pause state and cancellation.
+    const cleanupResumed = athirNativeService.onTransferResumed((data) => {
+      setResumedFromMB(Math.round((data.offsetBytes / (1024 * 1024)) * 10) / 10);
+    });
+
+    const cleanupPaused = athirNativeService.onTransferPaused((data) => {
+      setRun(!data.paused);
+    });
+
+    const cleanupCancelled = athirNativeService.onTransferCancelled((data) => {
+      setRun(false);
+      setFin(false);
+      setErrorMessage(data.byPeer ? 'ألغى الطرف الآخر عملية النقل.' : 'أُلغيت عملية النقل.');
+    });
+
     const cleanupIntegrity = athirNativeService.onFileIntegrity((data) => {
       if (!data.verified) {
         setErrorMessage(
@@ -120,6 +136,9 @@ export const TransferScreen: React.FC = () => {
       cleanupChat();
       cleanupError();
       cleanupIntegrity();
+      cleanupResumed();
+      cleanupPaused();
+      cleanupCancelled();
     };
   }, [files]);
 
@@ -148,6 +167,7 @@ export const TransferScreen: React.FC = () => {
         window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
       }, 50);
     } else if (actionState === 'stop') {
+      // Sends a real PAUSE control frame; the peer stops streaming immediately.
       athirNativeService.pauseTransfer();
       setRun(false);
     } else if (actionState === 'play') {
@@ -229,8 +249,12 @@ export const TransferScreen: React.FC = () => {
               ? 'اكتمل النقل'
               : run
               ? speedText
-                ? `${sentMB.toFixed(1)} / ${totalMB.toFixed(1)} MB (${speedText})`
-                : `${sentMB.toFixed(1)} / ${totalMB.toFixed(1)} MB`
+                ? `${sentMB.toFixed(1)} / ${totalMB.toFixed(1)} MB (${speedText})${
+                    resumedFromMB > 0 ? ` · استُئنف من ${resumedFromMB} MB` : ''
+                  }`
+                : `${sentMB.toFixed(1)} / ${totalMB.toFixed(1)} MB${
+                    resumedFromMB > 0 ? ` · استُئنف من ${resumedFromMB} MB` : ''
+                  }`
               : 'متوقف مؤقتًا'}
           </span>
         </div>

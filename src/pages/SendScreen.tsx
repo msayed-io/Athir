@@ -122,6 +122,38 @@ export const SendScreen: React.FC = () => {
     });
   };
 
+  const handlePickDocuments = useCallback(async () => {
+    if (!supported) return;
+    setCatalogError('');
+    try {
+      const picked = await athirNativeService.pickDocuments();
+      if (picked.length === 0) return;
+      setSelectedItemsMap((prev) => {
+        const next = new Map(prev);
+        picked.forEach((doc) => {
+          const tuple: FileTuple = [doc.name, doc.sizeMB, undefined, doc.uri, doc.id];
+          next.set(doc.name, tuple);
+          athirNativeService.updateSelection('add', {
+            id: doc.id,
+            name: doc.name,
+            sizeMB: doc.sizeMB,
+            sizeBytes: doc.sizeBytes,
+            uri: doc.uri,
+            mimeType: doc.mimeType,
+            category: 'files',
+          });
+        });
+        return next;
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : '';
+      if (message.includes('PICKER_CANCELLED')) return;
+      setCatalogError(
+        message ? `تعذّر فتح مستندات الجهاز: ${message}` : 'تعذّر فتح مستندات الجهاز.'
+      );
+    }
+  }, [supported]);
+
   const handleSend = () => {
     if (selectedItemsMap.size === 0) return;
     const selectedList = Array.from(selectedItemsMap.values());
@@ -169,6 +201,27 @@ export const SendScreen: React.FC = () => {
           activeCategory={activeCategory}
           onChange={setActiveCategory}
         />
+
+        {supported && (
+          <div style={{ display: 'flex', gap: '8px', padding: '0 16px 10px' }}>
+            <button
+              type="button"
+              className="g c"
+              style={{
+                height: '38px',
+                padding: '0 14px',
+                fontSize: '13px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+              onClick={handlePickDocuments}
+            >
+              <Icon name="fold" />
+              مستندات الجهاز
+            </button>
+          </div>
+        )}
 
         {!supported ? (
           <div className="card" style={{ padding: '28px 20px', textAlign: 'center' }}>

@@ -25,6 +25,8 @@ export const ReceiveScreen: React.FC = () => {
   const [showQrInline, setShowQrInline] = useState(true);
   const [statusText, setStatusText] = useState('جارٍ بدء وضع الاستلام…');
   const [errorText, setErrorText] = useState('');
+  const [offlineMode, setOfflineMode] = useState<'lan' | 'hotspot' | 'p2p'>('lan');
+  const [offlineBusy, setOfflineBusy] = useState(false);
 
   useEffect(() => {
     let unmounted = false;
@@ -74,9 +76,34 @@ export const ReceiveScreen: React.FC = () => {
       unmounted = true;
       cleanupPeer();
       cleanupProgress();
+      athirNativeService.stopOfflineTransport().catch(() => {});
       athirNativeService.stopReceiving().catch(() => {});
     };
   }, [navigate]);
+
+  const enableOfflineTransport = async () => {
+    if (offlineBusy) return;
+    setOfflineBusy(true);
+    setErrorText('');
+    try {
+      const link = await athirNativeService.startOfflineTransport();
+      setOfflineMode(link.transport);
+      if (link.qrDataUrl) setQrCodeUrl(link.qrDataUrl);
+      setStatusText(
+        link.transport === 'hotspot'
+          ? `نقطة اتصال محلية: ${link.ssid}`
+          : 'شبكة Wi-Fi Direct جاهزة'
+      );
+    } catch (e) {
+      setErrorText(
+        e instanceof Error
+          ? e.message.replace('NATIVE_ONLY: ', '').replace('NO_OFFLINE_TRANSPORT: ', '')
+          : 'تعذّر تشغيل النقل بدون راوتر'
+      );
+    } finally {
+      setOfflineBusy(false);
+    }
+  };
 
   const handleAction = () => {
     if (discoveredPeer && discoveredPeer.secret) {
@@ -171,6 +198,27 @@ export const ReceiveScreen: React.FC = () => {
               <p className="qr-subtext" style={{ marginTop: '14px', fontSize: '12px', color: 'var(--t2)', textAlign: 'center' }}>
                 امسح الرمز من جهاز المرسل للربط المباشر
               </p>
+              <button
+                type="button"
+                className="g c"
+                style={{
+                  marginTop: '10px',
+                  height: '38px',
+                  fontSize: '13px',
+                  opacity: offlineBusy ? 0.5 : 1,
+                }}
+                onClick={enableOfflineTransport}
+                disabled={offlineBusy}
+              >
+                <Icon name="hs" />
+                {offlineMode === 'lan'
+                  ? offlineBusy
+                    ? 'جارٍ تجهيز الشبكة…'
+                    : 'نقل بدون راوتر'
+                  : offlineMode === 'hotspot'
+                  ? 'نقطة اتصال محلية'
+                  : 'Wi-Fi Direct'}
+              </button>
             </div>
           </div>
         ) : (

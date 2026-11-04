@@ -1,22 +1,19 @@
 package com.athir.datatransfer
 
-import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
 import org.json.JSONObject
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
-import java.io.FileOutputStream
 import java.io.InputStream
-import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.nio.ByteBuffer
 import java.security.MessageDigest
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLServerSocket
@@ -27,17 +24,23 @@ import javax.net.ssl.SSLSocketFactory
 /**
  * Real byte-level transfer engine speaking the ATHR frame protocol over TLS.
  *
- * Hardening applied in this revision (see docs/NATIVE_REAL_TRANSFER_REPORT.md):
- *  - every frame declares a bounded payload length, oversized frames are rejected;
- *  - the receiver verifies the per-file SHA-256 hash sent in FILE_DONE before
- *    reporting success (integrity is enforced, not decorative);
- *  - peer supplied file names are sanitized and the resolved destination path is
- *    validated against directory traversal;
- *  - accepted sockets carry a read timeout so a stalled peer cannot pin the
- *    receiver forever;
- *  - each inbound connection is served on its own worker thread.
+ * Capabilities implemented here:
+ *  - authenticated session handshake (AUTH_REQ / AUTH_RES);
+ *  - resumable transfers: the sender announces size + full-file SHA-256 in FILE_META and
+ *    the receiver answers with FILE_ACK carrying the byte offset it already holds, so the
+ *    sender seeks and continues instead of restarting;
+ *  - a bidirectional control channel inside the same TLS/TCP stream (PAUSE / RESUME /
+ *    CANCEL) handled by a dedicated reader thread on the sender side, so control frames
+ *    are never lost while file bytes are streaming;
+ *  - per-file SHA-256 verification before a file is published to Downloads;
+ *  - bounded frame sizes, socket read timeouts and one worker thread per inbound peer.
+ *
+ * Nothing in this class simulates a transfer: bytes are read from the real content
+ * provider and written to real files.
  */
 class TransferEngine(private val context: Context) {
+
+    enum class Role { NONE, SENDER, RECEIVER }
 
     interface TransferListener {
         fun onProgress(
@@ -50,13 +53,19 @@ class TransferEngine(private val context: Context) {
         )
         fun onFileCompleted(fileName: String, sizeBytes: Long, isReceived: Boolean)
         fun onIntegrityVerified(fileName: String, verified: Boolean)
+        fun onResumedFrom(fileName: String, offset: Long)
         fun onAllCompleted(isSender: Boolean)
         fun onError(error: String)
         fun onChatMessage(message: String)
+        fun onCancelled(byPeer: Boolean)
+        fun onPausedChanged(paused: Boolean)
     }
 
     private val isPaused = AtomicBoolean(false)
     private val isCancelled = AtomicBoolean(false)
+
+    @Volatile
+    private var role: Role = Role.NONE
 
     @Volatile
     private var activeServerSocket: ServerSocket? = null
@@ -64,8 +73,28 @@ class TransferEngine(private val context: Context) {
     @Volatile
     private var activeClientSocket: Socket? = null
 
+    /** Control frames received from the peer while the sender is busy writing. */
+    private val inboundFrames = LinkedBlockingQueue<Pair<Byte, ByteArray>>()
+
+    fun isSender(): Boolean = role == Role.SENDER
+
     fun cancel() {
         isCancelled.set(true)
+        sendControlFrame(FRAME_CANCEL)
+        closeSockets()
+    }
+
+    fun pause() {
+        isPaused.set(true)
+        sendControlFrame(FRAME_PAUSE)
+    }
+
+    fun resume() {
+        isPaused.set(false)
+        sendControlFrame(FRAME_RESUME)
+    }
+
+    private fun closeSockets() {
         try {
             activeClientSocket?.close()
         } catch (ignored: Exception) {}
@@ -74,15 +103,17 @@ class TransferEngine(private val context: Context) {
         } catch (ignored: Exception) {}
     }
 
-    fun pause() {
-        isPaused.set(true)
+    private fun sendControlFrame(frameType: Byte) {
+        val socket = activeClientSocket ?: return
+        try {
+            if (socket.isClosed) return
+            writeFrame(DataOutputStream(socket.outputStream), frameType, ByteArray(0))
+        } catch (ignored: Exception) {
+        }
     }
 
-    fun resume() {
-        isPaused.set(false)
-    }
+    // --- RECEIVER ---
 
-    // --- RECEIVER SERVER ---
     fun startReceiverServer(
         port: Int,
         sslContext: SSLContext,
@@ -91,6 +122,7 @@ class TransferEngine(private val context: Context) {
     ) {
         isCancelled.set(false)
         isPaused.set(false)
+        role = Role.RECEIVER
 
         val ssf: SSLServerSocketFactory = sslContext.serverSocketFactory
         val serverSocket = ssf.createServerSocket(port) as SSLServerSocket
@@ -105,8 +137,6 @@ class TransferEngine(private val context: Context) {
                     if (isCancelled.get()) break else continue
                 }
                 activeClientSocket = socket
-                // Serve every inbound connection on its own thread so that a slow or
-                // malicious peer cannot block legitimate senders.
                 Thread({
                     try {
                         socket.soTimeout = SOCKET_READ_TIMEOUT_MS
@@ -121,9 +151,7 @@ class TransferEngine(private val context: Context) {
                 }, "Athir-ReceiverConn").start()
             }
         } catch (e: Exception) {
-            if (!isCancelled.get()) {
-                listener.onError("Server socket error: ${e.message}")
-            }
+            if (!isCancelled.get()) listener.onError("Server socket error: ${e.message}")
         } finally {
             try {
                 serverSocket.close()
@@ -141,35 +169,33 @@ class TransferEngine(private val context: Context) {
             val dis = DataInputStream(socket.inputStream)
             val dos = DataOutputStream(socket.outputStream)
 
-            // 1. Authenticate handshake
             val (frameType, authPayload) = readFrame(dis)
             if (frameType != FRAME_AUTH_REQ) {
-                writeFrame(dos, FRAME_AUTH_RES, byteArrayOf(0x01)) // REJECTED
+                writeFrame(dos, FRAME_AUTH_RES, byteArrayOf(0x01))
                 listener.onError("Authentication failed: invalid handshake frame")
                 return
             }
-
             val receivedSecret = String(authPayload, Charsets.UTF_8).trim()
             if (expectedSessionSecret.isBlank() || receivedSecret != expectedSessionSecret.trim()) {
-                writeFrame(dos, FRAME_AUTH_RES, byteArrayOf(0x01)) // REJECTED
+                writeFrame(dos, FRAME_AUTH_RES, byteArrayOf(0x01))
                 listener.onError("Authentication failed: session secret mismatch")
                 return
             }
+            writeFrame(dos, FRAME_AUTH_RES, byteArrayOf(0x00))
 
-            // Auth succeeded
-            writeFrame(dos, FRAME_AUTH_RES, byteArrayOf(0x00)) // OK
-
-            // 2. Receive frames loop
-            var currentFileOut: OutputStream? = null
+            var currentOut: java.io.OutputStream? = null
+            var currentPart: File? = null
             var currentFileName = ""
-            var currentFileSize = 0L
+            var currentMime = "*/*"
+            var currentSize = 0L
+            var expectedSha: ByteArray? = null
+            var digest: MessageDigest? = null
             var totalBytesExpected = 0L
-            var totalBytesTransferred = 0L
-            var lastSpeedCheckTime = System.currentTimeMillis()
-            var bytesSinceLastCheck = 0L
+            var totalTransferred = 0L
+            var lastCheck = System.currentTimeMillis()
+            var bytesSinceCheck = 0L
             var fileIndex = 0
             var totalFiles = 1
-            var shaDigest: MessageDigest? = null
 
             while (!isCancelled.get()) {
                 val (type, payload) = try {
@@ -179,46 +205,88 @@ class TransferEngine(private val context: Context) {
                 }
 
                 when (type) {
-                    FRAME_CHAT -> {
-                        val text = String(payload, Charsets.UTF_8)
-                        listener.onChatMessage(text)
+                    FRAME_CHAT -> listener.onChatMessage(String(payload, Charsets.UTF_8))
+
+                    FRAME_PAUSE -> listener.onPausedChanged(true)
+
+                    FRAME_RESUME -> listener.onPausedChanged(false)
+
+                    FRAME_CANCEL -> {
+                        isCancelled.set(true)
+                        currentOut?.close()
+                        currentOut = null
+                        listener.onCancelled(true)
+                        break
                     }
 
                     FRAME_FILE_META -> {
                         val json = JSONObject(String(payload, Charsets.UTF_8))
-                        val rawName = json.optString("name", "athir_file")
-                        currentFileName = sanitizeFileName(rawName)
-                        currentFileSize = json.optLong("size", 0L)
+                        currentFileName = sanitizeFileName(json.optString("name", "athir_file"))
+                        currentMime = json.optString("mimeType", "*/*")
+                        currentSize = json.optLong("size", 0L)
                         totalFiles = json.optInt("totalFiles", 1)
                         fileIndex = json.optInt("fileIndex", 0)
-                        totalBytesExpected = json.optLong("totalBytes", currentFileSize)
-                        shaDigest = MessageDigest.getInstance("SHA-256")
+                        totalBytesExpected = json.optLong("totalBytes", currentSize)
+                        expectedSha = AthrFrameCodec.hexToBytesOrNull(json.optString("sha256", ""))
 
-                        currentFileOut?.close()
-                        currentFileOut = createDownloadOutputStream(
-                            context,
-                            currentFileName,
-                            json.optString("mimeType", "*/*")
-                        )
+                        val key = json.optString("sha256", "")
+                        val part = PartialFileStore.partFile(context, key, currentFileName)
+                        // Only trust a resume offset when the announced size is known;
+                        // otherwise sender and receiver could disagree on the position.
+                        val offset = if (currentSize > 0L) {
+                            PartialFileStore.resumeOffset(part, currentSize)
+                        } else {
+                            PartialFileStore.delete(part)
+                            0L
+                        }
+
+                        currentOut?.close()
+                        currentOut = null
+                        currentPart = part
+
+                        val md = MessageDigest.getInstance("SHA-256")
+                        if (offset > 0L) {
+                            // Feed the already-received prefix so the final hash still
+                            // covers the whole file after a resumed transfer.
+                            part.inputStream().use { prefix ->
+                                val buffer = ByteArray(256 * 1024)
+                                var remaining = offset
+                                while (remaining > 0) {
+                                    val read = prefix.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                                    if (read <= 0) break
+                                    md.update(buffer, 0, read)
+                                    remaining -= read
+                                }
+                            }
+                            listener.onResumedFrom(currentFileName, offset)
+                        }
+                        digest = md
+                        if (offset < currentSize || currentSize == 0L) {
+                            currentOut = PartialFileStore.openAppend(part, offset > 0L)
+                        } else {
+                            currentOut = null
+                        }
+                        totalTransferred = offset
+
+                        writeFrame(dos, FRAME_FILE_ACK, longToBytes(offset))
                     }
 
                     FRAME_FILE_CHUNK -> {
-                        currentFileOut?.write(payload)
-                        shaDigest?.update(payload)
-                        totalBytesTransferred += payload.size
-                        bytesSinceLastCheck += payload.size
+                        currentOut?.write(payload)
+                        digest?.update(payload)
+                        totalTransferred += payload.size
+                        bytesSinceCheck += payload.size
 
                         val now = System.currentTimeMillis()
-                        val elapsed = now - lastSpeedCheckTime
+                        val elapsed = now - lastCheck
                         if (elapsed >= PROGRESS_INTERVAL_MS) {
-                            val currentSpeed = (bytesSinceLastCheck * 1000L) / Math.max(elapsed, 1L)
-                            lastSpeedCheckTime = now
-                            bytesSinceLastCheck = 0L
-
+                            val speed = (bytesSinceCheck * 1000L) / Math.max(elapsed, 1L)
+                            lastCheck = now
+                            bytesSinceCheck = 0L
                             listener.onProgress(
-                                totalBytesTransferred,
+                                totalTransferred,
                                 totalBytesExpected,
-                                currentSpeed,
+                                speed,
                                 currentFileName,
                                 fileIndex,
                                 totalFiles
@@ -227,21 +295,46 @@ class TransferEngine(private val context: Context) {
                     }
 
                     FRAME_FILE_DONE -> {
-                        currentFileOut?.flush()
-                        currentFileOut?.close()
-                        currentFileOut = null
+                        currentOut?.flush()
+                        currentOut?.close()
+                        currentOut = null
 
-                        val actual = shaDigest?.digest()
-                        val verified = actual != null &&
-                            payload.size == actual.size &&
-                            payload.contentEquals(actual)
-
+                        val actual = digest?.digest()
+                        val announced = expectedSha
+                        val verified = actual != null && announced != null &&
+                            announced.size == actual.size && announced.contentEquals(actual)
                         listener.onIntegrityVerified(currentFileName, verified)
 
-                        if (!verified) {
+                        val part = currentPart
+                        if (verified && part != null) {
+                            val published = PartialFileStore.publishToDownloads(
+                                context, part, currentFileName, currentMime
+                            )
+                            if (published) {
+                                PartialFileStore.delete(part)
+                                listener.onFileCompleted(currentFileName, currentSize, true)
+                                HistoryStore.getInstance(context).addRecord(
+                                    currentFileName,
+                                    TransferEngine.formatSizeMb(currentSize),
+                                    "استُلم",
+                                    "المرسل",
+                                    "مكتمل"
+                                )
+                            } else {
+                                HistoryStore.getInstance(context).addRecord(
+                                    currentFileName,
+                                    TransferEngine.formatSizeMb(currentSize),
+                                    "استُلم",
+                                    "المرسل",
+                                    "فشل الحفظ"
+                                )
+                                listener.onError("Could not publish \"$currentFileName\" to Downloads")
+                                return
+                            }
+                        } else {
                             HistoryStore.getInstance(context).addRecord(
                                 currentFileName,
-                                formatSizeMb(currentFileSize),
+                                TransferEngine.formatSizeMb(currentSize),
                                 "استُلم",
                                 "المرسل",
                                 "فشل التحقق"
@@ -252,46 +345,23 @@ class TransferEngine(private val context: Context) {
                             )
                             return
                         }
-
-                        listener.onFileCompleted(currentFileName, currentFileSize, true)
-                        HistoryStore.getInstance(context).addRecord(
-                            currentFileName,
-                            formatSizeMb(currentFileSize),
-                            "استُلم",
-                            "المرسل",
-                            "مكتمل"
-                        )
                     }
 
                     FRAME_SESSION_DONE -> {
                         listener.onAllCompleted(false)
                         break
                     }
-
-                    FRAME_PAUSE -> {
-                        isPaused.set(true)
-                    }
-
-                    FRAME_RESUME -> {
-                        isPaused.set(false)
-                    }
-
-                    FRAME_CANCEL -> {
-                        isCancelled.set(true)
-                        break
-                    }
                 }
             }
 
-            currentFileOut?.close()
+            currentOut?.close()
         } catch (e: Exception) {
-            if (!isCancelled.get()) {
-                listener.onError("Receiver error: ${e.message}")
-            }
+            if (!isCancelled.get()) listener.onError("Receiver error: ${e.message}")
         }
     }
 
-    // --- SENDER CLIENT ---
+    // --- SENDER ---
+
     fun sendFiles(
         host: String,
         port: Int,
@@ -302,6 +372,8 @@ class TransferEngine(private val context: Context) {
     ) {
         isCancelled.set(false)
         isPaused.set(false)
+        role = Role.SENDER
+        inboundFrames.clear()
 
         val sf: SSLSocketFactory = sslContext.socketFactory
         val socket = sf.createSocket() as SSLSocket
@@ -316,26 +388,28 @@ class TransferEngine(private val context: Context) {
             val dos = DataOutputStream(socket.outputStream)
             val dis = DataInputStream(socket.inputStream)
 
-            // 1. Send AUTH_REQ
             writeFrame(dos, FRAME_AUTH_REQ, sessionSecret.toByteArray(Charsets.UTF_8))
-
-            // 2. Read AUTH_RES
             val (authResType, authResPayload) = readFrame(dis)
             if (authResType != FRAME_AUTH_RES || authResPayload.isEmpty() || authResPayload[0] != 0x00.toByte()) {
                 listener.onError("Receiver rejected authentication for this session.")
                 return
             }
 
-            // 3. Stream all files
+            // Control channel: everything the peer sends from now on is read here.
+            startControlReader(dis, listener)
+
             val totalBytes = items.sumOf { it.sizeBytes }
-            var totalBytesSent = 0L
-            var lastSpeedCheckTime = System.currentTimeMillis()
-            var bytesSinceLastCheck = 0L
+            var totalSent = 0L
+            var lastCheck = System.currentTimeMillis()
+            var bytesSinceCheck = 0L
 
             for ((index, item) in items.withIndex()) {
                 if (isCancelled.get()) break
+                awaitWhilePaused()
 
-                // Send FILE_META
+                // 1. Announce the file with its full SHA-256 so the receiver can resume
+                //    and verify the final content.
+                val fullHash = computeSha256(item.uri)
                 val metaJson = JSONObject().apply {
                     put("id", item.id)
                     put("name", item.name)
@@ -344,50 +418,49 @@ class TransferEngine(private val context: Context) {
                     put("fileIndex", index)
                     put("totalFiles", items.size)
                     put("totalBytes", totalBytes)
+                    put("sha256", fullHash?.let { AthrFrameCodec.toHex(it) } ?: "")
                 }
                 writeFrame(dos, FRAME_FILE_META, metaJson.toString().toByteArray(Charsets.UTF_8))
 
-                val inputStream: InputStream? = openInputStream(context, item.uri)
+                // 2. Wait for the receiver's resume offset.
+                val ack = awaitFrame(FRAME_FILE_ACK, ACK_TIMEOUT_MS)
+                var offset = 0L
+                if (ack != null && ack.second.size == 8) {
+                    offset = ByteBuffer.wrap(ack.second).long
+                }
+                if (offset < 0L) offset = 0L
+                if (offset > item.sizeBytes) offset = 0L
+                totalSent += offset
+
+                val inputStream = openInputStream(item.uri)
                 if (inputStream == null) {
                     listener.onError("Cannot open file: ${item.name}")
                     continue
                 }
 
                 val buffer = ByteArray(CHUNK_SIZE_BYTES)
-                val sha = MessageDigest.getInstance("SHA-256")
-
                 try {
                     inputStream.use { stream ->
+                        if (offset > 0L) stream.skipFully(offset)
                         while (!isCancelled.get()) {
-                            while (isPaused.get() && !isCancelled.get()) {
-                                Thread.sleep(100)
-                            }
+                            awaitWhilePaused()
+                            if (drainControlAndCheckCancel()) break
 
                             val read = stream.read(buffer)
                             if (read <= 0) break
-
                             val chunk = if (read == buffer.size) buffer else buffer.copyOf(read)
                             writeFrame(dos, FRAME_FILE_CHUNK, chunk)
-                            sha.update(chunk)
 
-                            totalBytesSent += read
-                            bytesSinceLastCheck += read
+                            totalSent += read
+                            bytesSinceCheck += read
 
                             val now = System.currentTimeMillis()
-                            val elapsed = now - lastSpeedCheckTime
+                            val elapsed = now - lastCheck
                             if (elapsed >= PROGRESS_INTERVAL_MS) {
-                                val currentSpeed = (bytesSinceLastCheck * 1000L) / Math.max(elapsed, 1L)
-                                lastSpeedCheckTime = now
-                                bytesSinceLastCheck = 0L
-
-                                listener.onProgress(
-                                    totalBytesSent,
-                                    totalBytes,
-                                    currentSpeed,
-                                    item.name,
-                                    index,
-                                    items.size
-                                )
+                                val speed = (bytesSinceCheck * 1000L) / Math.max(elapsed, 1L)
+                                lastCheck = now
+                                bytesSinceCheck = 0L
+                                listener.onProgress(totalSent, totalBytes, speed, item.name, index, items.size)
                             }
                         }
                     }
@@ -399,11 +472,11 @@ class TransferEngine(private val context: Context) {
                 }
 
                 if (!isCancelled.get()) {
-                    writeFrame(dos, FRAME_FILE_DONE, sha.digest())
+                    writeFrame(dos, FRAME_FILE_DONE, fullHash ?: ByteArray(0))
                     listener.onFileCompleted(item.name, item.sizeBytes, false)
                     HistoryStore.getInstance(context).addRecord(
                         item.name,
-                        formatSizeMb(item.sizeBytes),
+                        TransferEngine.formatSizeMb(item.sizeBytes),
                         "أُرسل",
                         "المستلم",
                         "مكتمل"
@@ -416,38 +489,122 @@ class TransferEngine(private val context: Context) {
                 listener.onAllCompleted(true)
             }
         } catch (e: Exception) {
-            if (!isCancelled.get()) {
-                listener.onError("Sender error: ${e.message}")
-            }
+            if (!isCancelled.get()) listener.onError("Sender error: ${e.message}")
         } finally {
             try {
                 socket.close()
             } catch (ignored: Exception) {}
             activeClientSocket = null
+            role = Role.NONE
+        }
+    }
+
+    private fun startControlReader(dis: DataInputStream, listener: TransferListener) {
+        Thread({
+            while (!isCancelled.get()) {
+                try {
+                    val frame = readFrame(dis)
+                    when (frame.first) {
+                        FRAME_CANCEL -> {
+                            isCancelled.set(true)
+                            listener.onCancelled(true)
+                        }
+                        FRAME_PAUSE -> {
+                            isPaused.set(true)
+                            listener.onPausedChanged(true)
+                        }
+                        FRAME_RESUME -> {
+                            isPaused.set(false)
+                            listener.onPausedChanged(false)
+                        }
+                        FRAME_CHAT -> listener.onChatMessage(String(frame.second, Charsets.UTF_8))
+                        else -> inboundFrames.put(frame)
+                    }
+                } catch (e: Exception) {
+                    break
+                }
+            }
+        }, "Athir-ControlReader").start()
+    }
+
+    private fun awaitFrame(expected: Byte, timeoutMs: Long): Pair<Byte, ByteArray>? {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (isCancelled.get()) return null
+            val frame = inboundFrames.poll(200, TimeUnit.MILLISECONDS) ?: continue
+            if (frame.first == expected) return frame
+        }
+        return null
+    }
+
+    /** Returns true when the transfer was cancelled by the peer. */
+    private fun drainControlAndCheckCancel(): Boolean {
+        while (true) {
+            val frame = inboundFrames.poll() ?: return isCancelled.get()
+            when (frame.first) {
+                FRAME_CANCEL -> {
+                    isCancelled.set(true)
+                    return true
+                }
+                FRAME_PAUSE -> isPaused.set(true)
+                FRAME_RESUME -> isPaused.set(false)
+            }
+        }
+    }
+
+    private fun awaitWhilePaused() {
+        while (isPaused.get() && !isCancelled.get()) {
+            try {
+                Thread.sleep(100)
+            } catch (ignored: InterruptedException) {
+                return
+            }
         }
     }
 
     fun sendChatMessage(message: String) {
         val socket = activeClientSocket ?: return
         try {
-            val dos = DataOutputStream(socket.outputStream)
-            writeFrame(dos, FRAME_CHAT, message.toByteArray(Charsets.UTF_8))
+            writeFrame(DataOutputStream(socket.outputStream), FRAME_CHAT, message.toByteArray(Charsets.UTF_8))
         } catch (ignored: Exception) {}
     }
 
-    /** Restricts the TLS handshake to modern protocol versions on both ends. */
-    private fun applyTlsPolicy(socket: SSLSocket) {
-        try {
-            val supported = socket.supportedProtocols?.toSet() ?: emptySet()
-            val allowed = listOf("TLSv1.3", "TLSv1.2").filter { supported.contains(it) }
-            if (allowed.isNotEmpty()) {
-                socket.enabledProtocols = allowed.toTypedArray()
+    // --- helpers ---
+
+    private fun InputStream.skipFully(bytes: Long) {
+        var remaining = bytes
+        val discard = ByteArray(64 * 1024)
+        while (remaining > 0) {
+            val skipped = skip(remaining)
+            if (skipped > 0) {
+                remaining -= skipped
+                continue
             }
-        } catch (ignored: Exception) {
+            val read = read(discard, 0, minOf(discard.size.toLong(), remaining).toInt())
+            if (read <= 0) break
+            remaining -= read
         }
     }
 
-    private fun openInputStream(context: Context, uriStr: String): InputStream? {
+    private fun computeSha256(uri: String): ByteArray? {
+        return try {
+            val stream = openInputStream(uri) ?: return null
+            val md = MessageDigest.getInstance("SHA-256")
+            stream.use { input ->
+                val buffer = ByteArray(256 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    md.update(buffer, 0, read)
+                }
+            }
+            md.digest()
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun openInputStream(uriStr: String): InputStream? {
         return try {
             val uri = Uri.parse(uriStr)
             if (uri.scheme == "file") {
@@ -460,10 +617,6 @@ class TransferEngine(private val context: Context) {
         }
     }
 
-    /**
-     * Strips directory components and control characters from a peer supplied name.
-     * Peer input is untrusted: it must never influence the destination directory.
-     */
     private fun sanitizeFileName(raw: String): String {
         val base = raw
             .substringAfterLast('/')
@@ -471,66 +624,38 @@ class TransferEngine(private val context: Context) {
             .replace(Regex("[\\u0000-\\u001F]"), "")
             .replace("..", "_")
             .trim()
-        val fallback = "athir_file_${System.currentTimeMillis()}"
-        val safe = base.ifBlank { fallback }
+        val safe = base.ifBlank { "athir_file_${System.currentTimeMillis()}" }
         return if (safe.length > MAX_FILE_NAME_LENGTH) safe.take(MAX_FILE_NAME_LENGTH) else safe
     }
 
-    private fun createDownloadOutputStream(context: Context, fileName: String, mimeType: String): OutputStream {
-        val safeName = sanitizeFileName(fileName)
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, safeName)
-                put(MediaStore.Downloads.MIME_TYPE, mimeType)
-                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Athir")
-            }
-            val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                ?: throw IllegalStateException("Cannot create MediaStore download entry")
-            context.contentResolver.openOutputStream(uri)
-                ?: throw IllegalStateException("Cannot open download output stream")
-        } else {
-            val athirDir = File(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                "Athir"
-            )
-            if (!athirDir.exists() && !athirDir.mkdirs()) {
-                throw IllegalStateException("Cannot create Athir downloads directory")
-            }
-            val targetFile = File(athirDir, safeName)
-            // Defense in depth: the canonical path must stay inside the Athir directory.
-            val basePath = athirDir.canonicalPath + File.separator
-            if (!targetFile.canonicalPath.startsWith(basePath)) {
-                throw SecurityException("Rejected unsafe destination path for \"$safeName\"")
-            }
-            FileOutputStream(targetFile)
+    private fun applyTlsPolicy(socket: SSLSocket) {
+        try {
+            val supported = socket.supportedProtocols?.toSet() ?: emptySet()
+            val allowed = listOf("TLSv1.3", "TLSv1.2").filter { supported.contains(it) }
+            if (allowed.isNotEmpty()) socket.enabledProtocols = allowed.toTypedArray()
+        } catch (ignored: Exception) {
         }
     }
 
     companion object {
-        // 4 bytes Magic 'A','T','H','R'
-        private val MAGIC = byteArrayOf('A'.code.toByte(), 'T'.code.toByte(), 'H'.code.toByte(), 'R'.code.toByte())
-        private const val PROTOCOL_VERSION: Byte = 0x01
+        const val FRAME_AUTH_REQ: Byte = AthrFrameCodec.FRAME_AUTH_REQ
+        const val FRAME_AUTH_RES: Byte = AthrFrameCodec.FRAME_AUTH_RES
+        const val FRAME_CHAT: Byte = AthrFrameCodec.FRAME_CHAT
+        const val FRAME_FILE_META: Byte = AthrFrameCodec.FRAME_FILE_META
+        const val FRAME_FILE_CHUNK: Byte = AthrFrameCodec.FRAME_FILE_CHUNK
+        const val FRAME_FILE_ACK: Byte = AthrFrameCodec.FRAME_FILE_ACK
+        const val FRAME_FILE_DONE: Byte = AthrFrameCodec.FRAME_FILE_DONE
+        const val FRAME_PAUSE: Byte = AthrFrameCodec.FRAME_PAUSE
+        const val FRAME_RESUME: Byte = AthrFrameCodec.FRAME_RESUME
+        const val FRAME_CANCEL: Byte = AthrFrameCodec.FRAME_CANCEL
+        const val FRAME_SESSION_DONE: Byte = AthrFrameCodec.FRAME_SESSION_DONE
 
-        const val FRAME_AUTH_REQ: Byte = 0x01
-        const val FRAME_AUTH_RES: Byte = 0x02
-        const val FRAME_CHAT: Byte = 0x03
-        const val FRAME_FILE_META: Byte = 0x10
-        const val FRAME_FILE_CHUNK: Byte = 0x11
-        const val FRAME_FILE_ACK: Byte = 0x12
-        const val FRAME_FILE_DONE: Byte = 0x13
-        const val FRAME_PAUSE: Byte = 0x20
-        const val FRAME_RESUME: Byte = 0x21
-        const val FRAME_CANCEL: Byte = 0x30
-        const val FRAME_SESSION_DONE: Byte = 0xFF.toByte()
-
-        /** 64 KB payload per chunk frame. */
-        const val CHUNK_SIZE_BYTES = 64 * 1024
-
-        /** Hard ceiling for any inbound frame payload (chunks are the largest legitimate frames). */
-        const val MAX_PAYLOAD_BYTES = 512 * 1024
+        const val CHUNK_SIZE_BYTES = AthrFrameCodec.CHUNK_SIZE_BYTES
+        const val MAX_PAYLOAD_BYTES = AthrFrameCodec.MAX_PAYLOAD_BYTES
 
         private const val CONNECT_TIMEOUT_MS = 8_000
         private const val SOCKET_READ_TIMEOUT_MS = 300_000
+        private const val ACK_TIMEOUT_MS = 20_000
         private const val PROGRESS_INTERVAL_MS = 100L
         private const val MAX_FILE_NAME_LENGTH = 180
 
@@ -539,40 +664,11 @@ class TransferEngine(private val context: Context) {
             return "$mb MB"
         }
 
-        fun writeFrame(dos: DataOutputStream, frameType: Byte, payload: ByteArray) {
-            dos.write(MAGIC)
-            dos.writeByte(PROTOCOL_VERSION.toInt())
-            dos.writeByte(frameType.toInt())
-            dos.writeInt(payload.size)
-            if (payload.isNotEmpty()) {
-                dos.write(payload)
-            }
-            dos.flush()
-        }
+        fun longToBytes(value: Long): ByteArray = AthrFrameCodec.longToBytes(value)
 
-        fun readFrame(dis: DataInputStream): Pair<Byte, ByteArray> {
-            val magic = ByteArray(4)
-            dis.readFully(magic)
-            if (!magic.contentEquals(MAGIC)) {
-                throw IllegalStateException("Invalid ATHR frame magic")
-            }
-            val version = dis.readByte()
-            if (version != PROTOCOL_VERSION) {
-                throw IllegalStateException("Unsupported protocol version: $version")
-            }
-            val frameType = dis.readByte()
-            val length = dis.readInt()
-            if (length < 0 || length > MAX_PAYLOAD_BYTES) {
-                throw IllegalStateException("Rejected frame payload length: $length")
-            }
-            val payload = if (length > 0) {
-                val data = ByteArray(length)
-                dis.readFully(data)
-                data
-            } else {
-                ByteArray(0)
-            }
-            return Pair(frameType, payload)
-        }
+        fun writeFrame(dos: DataOutputStream, frameType: Byte, payload: ByteArray) =
+            AthrFrameCodec.writeFrame(dos, frameType, payload)
+
+        fun readFrame(dis: DataInputStream): Pair<Byte, ByteArray> = AthrFrameCodec.readFrame(dis)
     }
 }

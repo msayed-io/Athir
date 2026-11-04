@@ -147,6 +147,12 @@ jobs:
             -storepass:env ANDROID_KEYSTORE_PASSWORD -alias "$ANDROID_KEY_ALIAS" >/dev/null
           unset KEYSTORE_BASE64
 
+      - name: Run hardware-free unit tests
+        run: |
+          set -euo pipefail
+          chmod +x android/gradlew
+          ./android/gradlew --no-daemon --project-dir android :app:testDebugUnitTest --stacktrace
+
       - name: Build signed release APK
         env:
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/athir-release.jks

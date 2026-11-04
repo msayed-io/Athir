@@ -1,11 +1,18 @@
 package com.athir.datatransfer
 
+import android.app.Activity
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.provider.OpenableColumns
+import android.util.Log
+import androidx.activity.result.ActivityResult
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
+import com.getcapacitor.annotation.ActivityCallback
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import org.json.JSONObject
@@ -25,6 +32,10 @@ class AthirNativePlugin : Plugin() {
     private var transferEngine: TransferEngine? = null
     private var discoveryManager: DiscoveryManager? = null
     private var scannerEngine: ScannerEngine? = null
+    private var p2pTransport: P2pTransportManager? = null
+
+    /** Live receive session; the QR payload is regenerated when a P2P transport starts. */
+    private var activeSession: JSONObject? = null
 
     private var activeKeyPair: KeyPair? = null
     private var activeCert: X509Certificate? = null
@@ -37,6 +48,7 @@ class AthirNativePlugin : Plugin() {
         transferEngine = TransferEngine(context)
         discoveryManager = DiscoveryManager(context)
         scannerEngine = ScannerEngine(context)
+        p2pTransport = P2pTransportManager(context)
     }
 
     @PluginMethod
@@ -257,6 +269,7 @@ class AthirNativePlugin : Plugin() {
                     put("transport", "lan")
                 }
                 val qrString = qrObj.toString()
+                activeSession = qrObj
                 val qrDataUrl = QrEncoder.generateQrDataUrl(qrString, 512)
 
                 // Start advertising via mDNS
@@ -295,7 +308,248 @@ class AthirNativePlugin : Plugin() {
     fun stopReceiving(call: PluginCall) {
         discoveryManager?.stopAdvertising()
         transferEngine?.cancel()
+        p2pTransport?.stopAll()
+        activeSession = null
         call.resolve(JSObject().put("success", true))
+    }
+
+    // ------------------------------------------------------------------
+    // Router-free transports (Wi-Fi Direct / local-only hotspot)
+    // ------------------------------------------------------------------
+
+    /**
+     * Called by the receiving screen when the user asks for a transfer without a router.
+     * Tries a local-only hotspot first (it yields SSID + WPA2 passphrase that can travel
+     * inside the QR code), then falls back to Wi-Fi Direct group ownership.
+     */
+    @PluginMethod
+    fun startOfflineTransport(call: PluginCall) {
+        val session = activeSession
+        if (session == null) {
+            call.reject("Start receiving before requesting an offline transport")
+            return
+        }
+        val manager = p2pTransport
+        if (manager == null) {
+            call.reject("Offline transport is unavailable")
+            return
+        }
+
+        thread(name = "Athir-OfflineTransport") {
+            try {
+                manager.startLocalOnlyHotspot { hotspot ->
+                    if (hotspot.isSuccess) {
+                        val c = hotspot.getOrThrow()
+                        Log.d(P2pTransportManager.LOG_TAG, "offline transport = local hotspot")
+                        resolveOfflineTransport(call, session, "hotspot", c.ssid, c.passphrase, c.host, null)
+                        return@startLocalOnlyHotspot
+                    }
+                    Log.d(
+                        P2pTransportManager.LOG_TAG,
+                        "local hotspot unavailable (${hotspot.exceptionOrNull()?.message}), falling back to Wi-Fi Direct"
+                    )
+                    manager.startWifiDirectGroup { p2p ->
+                        if (p2p.isSuccess) {
+                            val c = p2p.getOrThrow()
+                            Log.d(P2pTransportManager.LOG_TAG, "offline transport = wifi direct")
+                            resolveOfflineTransport(
+                                call, session, "p2p", c.ssid, null, c.host, c.p2pDeviceAddress
+                            )
+                        } else {
+                            val reason = p2p.exceptionOrNull()?.message ?: "unknown"
+                            call.reject("NO_OFFLINE_TRANSPORT: $reason")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(P2pTransportManager.LOG_TAG, "startOfflineTransport threw: ${e.message}")
+                call.reject("Failed to start offline transport: ${e.message}")
+            }
+        }
+    }
+
+    private fun resolveOfflineTransport(
+        call: PluginCall,
+        session: JSONObject,
+        transport: String,
+        ssid: String?,
+        passphrase: String?,
+        host: String?,
+        p2pDeviceAddress: String?
+    ) {
+        try {
+            val effectiveHost = if (!host.isNullOrBlank() && host != "127.0.0.1") host else HOTSPOT_DEFAULT_GATEWAY
+            session.put("transport", transport)
+            session.put("host", effectiveHost)
+            if (!ssid.isNullOrBlank()) session.put("ssid", ssid)
+            if (!passphrase.isNullOrBlank()) session.put("psk", passphrase)
+            if (!p2pDeviceAddress.isNullOrBlank()) session.put("p2pAddr", p2pDeviceAddress)
+
+            val payload = session.toString()
+            val qrDataUrl = QrEncoder.generateQrDataUrl(payload, 512)
+
+            val ret = JSObject().apply {
+                put("transport", transport)
+                put("ssid", ssid ?: "")
+                put("passphrase", passphrase ?: "")
+                put("host", effectiveHost)
+                put("p2pDeviceAddress", p2pDeviceAddress ?: "")
+                put("qrPayload", payload)
+                put("qrDataUrl", qrDataUrl)
+            }
+            call.resolve(ret)
+        } catch (e: Exception) {
+            call.reject("Failed to publish offline transport: ${e.message}")
+        }
+    }
+
+    @PluginMethod
+    fun stopOfflineTransport(call: PluginCall) {
+        p2pTransport?.stopAll()
+        activeSession?.let {
+            try {
+                it.put("transport", "lan")
+                it.remove("ssid")
+                it.remove("psk")
+                it.remove("p2pAddr")
+            } catch (ignored: Exception) {}
+        }
+        call.resolve(JSObject().put("success", true))
+    }
+
+    /** Called by the sending device after scanning a QR that carries offline credentials. */
+    @PluginMethod
+    fun joinOfflineTransport(call: PluginCall) {
+        val manager = p2pTransport
+        if (manager == null) {
+            call.reject("Offline transport is unavailable")
+            return
+        }
+        val ssid = call.getString("ssid") ?: ""
+        val psk = call.getString("psk") ?: ""
+        val p2pAddress = call.getString("p2pDeviceAddress") ?: ""
+
+        thread(name = "Athir-JoinTransport") {
+            try {
+                if (p2pAddress.isNotBlank()) {
+                    manager.connectWifiDirect(p2pAddress) { result ->
+                        if (result.isSuccess) {
+                            call.resolve(JSObject().put("joined", true).put("transport", "p2p"))
+                        } else {
+                            call.reject("P2P_JOIN_FAILED: ${result.exceptionOrNull()?.message}")
+                        }
+                    }
+                } else if (ssid.isNotBlank()) {
+                    manager.joinLocalHotspot(ssid, psk) { result ->
+                        if (result.isSuccess) {
+                            call.resolve(JSObject().put("joined", true).put("transport", "hotspot"))
+                        } else {
+                            call.reject("HOTSPOT_JOIN_FAILED: ${result.exceptionOrNull()?.message}")
+                        }
+                    }
+                } else {
+                    call.reject("No offline transport credentials were provided")
+                }
+            } catch (e: Exception) {
+                Log.d(P2pTransportManager.LOG_TAG, "joinOfflineTransport threw: ${e.message}")
+                call.reject("Failed to join offline transport: ${e.message}")
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Storage Access Framework document picker
+    // ------------------------------------------------------------------
+
+    @PluginMethod
+    fun pickDocuments(call: PluginCall) {
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                addFlags(
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                )
+            }
+            startActivityForResult(call, intent, "documentPickerCallback")
+        } catch (e: Exception) {
+            Log.d("AthirPicker", "pickDocuments threw: ${e.message}")
+            call.reject("Failed to open the document picker: ${e.message}")
+        }
+    }
+
+    @ActivityCallback
+    private fun documentPickerCallback(call: PluginCall?, result: ActivityResult) {
+        if (call == null) return
+        if (result.resultCode != Activity.RESULT_OK) {
+            call.reject("PICKER_CANCELLED")
+            return
+        }
+        val data = result.data
+        if (data == null) {
+            call.reject("The document picker returned no data")
+            return
+        }
+
+        val uris = mutableListOf<Uri>()
+        try {
+            data.clipData?.let { clip ->
+                for (index in 0 until clip.itemCount) uris.add(clip.getItemAt(index).uri)
+            }
+            data.data?.let { uris.add(it) }
+        } catch (e: Exception) {
+            Log.d("AthirPicker", "reading picker result threw: ${e.message}")
+        }
+
+        if (uris.isEmpty()) {
+            call.resolve(JSObject().put("items", JSArray()).put("count", 0))
+            return
+        }
+
+        val items = JSArray()
+        for (uri in uris) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (ignored: Exception) {}
+            val described = describeUri(uri)
+            items.put(
+                JSObject().apply {
+                    put("id", "saf:${uri.toString().hashCode()}")
+                    put("name", described.first)
+                    put("sizeBytes", described.second)
+                    put("sizeMB", Math.round((described.second / (1024.0 * 1024.0)) * 10.0) / 10.0)
+                    put("uri", uri.toString())
+                    put("mimeType", context.contentResolver.getType(uri) ?: "*/*")
+                    put("category", "files")
+                }
+            )
+        }
+        call.resolve(JSObject().put("items", items).put("count", uris.size))
+    }
+
+    private fun describeUri(uri: Uri): Pair<String, Long> {
+        var name = "athir_document"
+        var size = 0L
+        try {
+            context.contentResolver.query(
+                uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (nameIndex >= 0) cursor.getString(nameIndex)?.let { name = it }
+                    if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) size = cursor.getLong(sizeIndex)
+                }
+            }
+        } catch (e: Exception) {
+            Log.d("AthirPicker", "describeUri threw: ${e.message}")
+        }
+        return Pair(name, size)
     }
 
     @PluginMethod
@@ -460,6 +714,10 @@ class AthirNativePlugin : Plugin() {
                                 put("secret", parsedPayload.optString("secret"))
                                 put("peerName", parsedPayload.optString("name"))
                                 put("peerId", parsedPayload.optString("id"))
+                                put("transport", parsedPayload.optString("transport", "lan"))
+                                put("ssid", parsedPayload.optString("ssid"))
+                                put("psk", parsedPayload.optString("psk"))
+                                put("p2pDeviceAddress", parsedPayload.optString("p2pAddr"))
                             }
                         }
                         notifyListeners("qrScanned", data)
@@ -484,6 +742,7 @@ class AthirNativePlugin : Plugin() {
 
     companion object {
         private const val REQUEST_CODE_PERMISSIONS = 1002
+        private const val HOTSPOT_DEFAULT_GATEWAY = "192.168.49.1"
 
         @Volatile
         private var liveInstance: AthirNativePlugin? = null
@@ -528,6 +787,23 @@ class AthirNativePlugin : Plugin() {
                     put("totalMB", Math.round((totalBytes / (1024.0 * 1024.0)) * 10.0) / 10.0)
                 }
                 notifyListeners("transferProgress", data)
+            }
+
+            override fun onResumedFrom(fileName: String, offset: Long) {
+                val data = JSObject().apply {
+                    put("fileName", fileName)
+                    put("offsetBytes", offset)
+                }
+                notifyListeners("transferResumed", data)
+            }
+
+            override fun onCancelled(byPeer: Boolean) {
+                TransferService.stop(context)
+                notifyListeners("transferCancelled", JSObject().put("byPeer", byPeer))
+            }
+
+            override fun onPausedChanged(paused: Boolean) {
+                notifyListeners("transferPaused", JSObject().put("paused", paused))
             }
 
             override fun onIntegrityVerified(fileName: String, verified: Boolean) {

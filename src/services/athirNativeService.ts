@@ -79,6 +79,34 @@ export interface DiscoveredPeer {
   source: 'qr' | 'mdns';
   /** True when the peer was discovered without a pairing secret and a QR scan is required. */
   requiresQr: boolean;
+  /** Physical transport announced inside the QR payload. */
+  transport?: 'lan' | 'hotspot' | 'p2p';
+  /** Local-only hotspot SSID (router-free mode). */
+  ssid?: string;
+  /** Local-only hotspot WPA2 passphrase (router-free mode). */
+  psk?: string;
+  /** Group owner Wi-Fi Direct device address (router-free mode). */
+  p2pDeviceAddress?: string;
+}
+
+export interface OfflineTransportResult {
+  transport: 'hotspot' | 'p2p';
+  ssid: string;
+  passphrase: string;
+  host: string;
+  p2pDeviceAddress: string;
+  qrPayload: string;
+  qrDataUrl: string;
+}
+
+export interface PickedDocument {
+  id: string;
+  name: string;
+  sizeBytes: number;
+  sizeMB: number;
+  uri: string;
+  mimeType: string;
+  category: string;
 }
 
 export interface TransferProgressEvent {
@@ -139,6 +167,13 @@ export interface AthirNativePluginInterface {
   clearTransferHistory(): Promise<{ success: boolean }>;
   startScanner(): Promise<{ scanning: boolean }>;
   stopScanner(): Promise<{ stopped: boolean }>;
+  startOfflineTransport(): Promise<OfflineTransportResult>;
+  stopOfflineTransport(): Promise<{ success: boolean }>;
+  joinOfflineTransport(options: { ssid?: string; psk?: string; p2pDeviceAddress?: string }): Promise<{
+    joined: boolean;
+    transport: string;
+  }>;
+  pickDocuments(): Promise<{ items: PickedDocument[]; count: number }>;
   addListener(eventName: string, listenerFunc: (data: any) => void): Promise<PluginListenerHandle>;
 }
 
@@ -377,6 +412,10 @@ export const athirNativeService = {
       peerName?: string;
       peerId?: string;
       source?: string;
+      transport?: 'lan' | 'hotspot' | 'p2p';
+      ssid?: string;
+      psk?: string;
+      p2pDeviceAddress?: string;
     }) => void
   ): () => void {
     if (!this.isNative()) return () => {};
@@ -386,6 +425,52 @@ export const athirNativeService = {
   onChatMessage(callback: (data: { message: string }) => void): () => void {
     if (!this.isNative()) return () => {};
     return subscribeNative('messageReceived', callback);
+  },
+
+  /** Emitted when a transfer continues from a previously received byte offset. */
+  onTransferResumed(callback: (data: { fileName: string; offsetBytes: number }) => void): () => void {
+    if (!this.isNative()) return () => {};
+    return subscribeNative('transferResumed', callback);
+  },
+
+  /** Emitted when either side cancels the session over the control channel. */
+  onTransferCancelled(callback: (data: { byPeer: boolean }) => void): () => void {
+    if (!this.isNative()) return () => {};
+    return subscribeNative('transferCancelled', callback);
+  },
+
+  onTransferPaused(callback: (data: { paused: boolean }) => void): () => void {
+    if (!this.isNative()) return () => {};
+    return subscribeNative('transferPaused', callback);
+  },
+
+  // ---- router-free transport (Wi-Fi Direct / local-only hotspot) ----
+
+  async startOfflineTransport(): Promise<OfflineTransportResult> {
+    requireNative('Router-free transfer setup');
+    return AthirNative.startOfflineTransport();
+  },
+
+  async stopOfflineTransport(): Promise<void> {
+    if (!this.isNative()) return;
+    await AthirNative.stopOfflineTransport().catch(() => {});
+  },
+
+  async joinOfflineTransport(options: {
+    ssid?: string;
+    psk?: string;
+    p2pDeviceAddress?: string;
+  }): Promise<void> {
+    requireNative('Joining a router-free network');
+    await AthirNative.joinOfflineTransport(options);
+  },
+
+  // ---- Storage Access Framework picker ----
+
+  async pickDocuments(): Promise<PickedDocument[]> {
+    requireNative('Document picking');
+    const res = await AthirNative.pickDocuments();
+    return res?.items ?? [];
   },
 };
 
