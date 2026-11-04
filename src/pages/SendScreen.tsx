@@ -23,6 +23,8 @@ export const SendScreen: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState('');
+  const supported = athirNativeService.isNative();
 
   // Selected items stored by filename -> FileTuple
   const [selectedItemsMap, setSelectedItemsMap] = useState<Map<string, FileTuple>>(() => {
@@ -38,16 +40,25 @@ export const SendScreen: React.FC = () => {
 
   const loadCategory = useCallback(async (cat: CategoryType, q?: string) => {
     setLoading(true);
+    setCatalogError('');
     try {
+      if (!supported) {
+        setCatalogItems([]);
+        return;
+      }
       const items = await athirNativeService.getMediaCatalog(cat, q);
       setCatalogItems(items);
     } catch (e) {
-      console.warn('Error loading catalog:', e);
       setCatalogItems([]);
+      setCatalogError(
+        e instanceof Error
+          ? `تعذّر قراءة ملفات الجهاز: ${e.message}`
+          : 'تعذّر قراءة ملفات الجهاز. تحقّق من الأذونات.'
+      );
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [supported]);
 
   useEffect(() => {
     loadCategory(activeCategory, searchQuery);
@@ -159,7 +170,23 @@ export const SendScreen: React.FC = () => {
           onChange={setActiveCategory}
         />
 
-        {loading ? (
+        {!supported ? (
+          <div className="card" style={{ padding: '28px 20px', textAlign: 'center' }}>
+            <b style={{ display: 'block', fontSize: '15px', marginBottom: '8px' }}>
+              متصفح الملفات يعمل داخل تطبيق أندرويد
+            </b>
+            <small style={{ color: 'var(--t2)', fontSize: '13px', lineHeight: 1.6 }}>
+              قراءة التطبيقات والصور والفيديو والملفات من الجهاز وظيفة أصلية عبر
+              MediaStore وPackageManager، ولا تُحاكى في المتصفح.
+            </small>
+          </div>
+        ) : catalogError ? (
+          <div className="card" style={{ padding: '28px 20px', textAlign: 'center' }}>
+            <small style={{ color: 'var(--danger)', fontSize: '13px', lineHeight: 1.6 }}>
+              {catalogError}
+            </small>
+          </div>
+        ) : loading ? (
           <div style={{ textAlign: 'center', padding: '40px', color: 'var(--t2)' }}>
             جارٍ تحميل ملفات الجهاز…
           </div>

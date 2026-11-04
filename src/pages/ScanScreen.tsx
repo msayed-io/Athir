@@ -2,7 +2,11 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { HeaderTop } from '../components/common/HeaderTop';
 import { Icon } from '../assets/icons/SvgSprite';
 import { useAppNavigation } from '../services/navigationService';
-import { athirNativeService, DiscoveredPeer } from '../services/athirNativeService';
+import {
+  athirNativeService,
+  DiscoveredPeer,
+  NativeOnlyError,
+} from '../services/athirNativeService';
 import './ScanScreen.css';
 
 export const ScanScreen: React.FC = () => {
@@ -12,124 +16,75 @@ export const ScanScreen: React.FC = () => {
     document.title = 'فحص للاتصال';
   }, []);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-
   const [discoveredPeer, setDiscoveredPeer] = useState<DiscoveredPeer | null>(null);
-  const [cameraActive, setCameraActive] = useState(false);
-  const startedRef = useRef(false);
+  const [supported, setSupported] = useState(athirNativeService.isNative());
+  const [statusMessage, setStatusMessage] = useState<string>('');
+  const [connectError, setConnectError] = useState<string>('');
+  const [connecting, setConnecting] = useState(false);
+  const mountedRef = useRef(true);
 
   const handlePeerFound = useCallback((peer: DiscoveredPeer) => {
-    setDiscoveredPeer(peer);
+    if (!mountedRef.current) return;
+    setDiscoveredPeer((current) => {
+      // A QR pairing always wins over an anonymous mDNS sighting of the same device.
+      if (current && current.secret && !peer.secret) return current;
+      return peer;
+    });
   }, []);
 
-  // Web camera preview fallback for non-native browsers
-  const startWebCamera = useCallback(async () => {
-    if (startedRef.current || athirNativeService.isNative()) return;
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      return;
-    }
-
-    startedRef.current = true;
-    try {
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { exact: 'environment' } },
-          audio: false,
-        });
-      } catch {
-        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      }
-
-      streamRef.current = stream;
-      setCameraActive(true);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(() => {});
-      }
-
-      if ('BarcodeDetector' in window) {
-        // @ts-expect-error BarcodeDetector is experimental in browsers
-        const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
-        const intervalId = setInterval(async () => {
-          try {
-            if (videoRef.current) {
-              const barcodes = await detector.detect(videoRef.current);
-              if (barcodes.length > 0) {
-                clearInterval(intervalId);
-                const raw = barcodes[0].rawValue;
-                try {
-                  const parsed = JSON.parse(raw);
-                  handlePeerFound({
-                    peerId: parsed.id || 'peer',
-                    peerName: parsed.name || 'جهاز مستلم',
-                    host: parsed.host || '127.0.0.1',
-                    port: parsed.port || 8888,
-                    fingerprint: parsed.fp || '',
-                    secret: parsed.secret || '',
-                  });
-                } catch {
-                  // Ignore
-                }
-              }
-            }
-          } catch {
-            // Ignore
-          }
-        }, 300);
-
-        return () => clearInterval(intervalId);
-      }
-    } catch {
-      startedRef.current = false;
-      setCameraActive(false);
-    }
-  }, [handlePeerFound]);
-
   useEffect(() => {
-    // 1. Native CameraX + ML Kit Barcode scanning
-    if (athirNativeService.isNative()) {
-      athirNativeService.startScanner();
-    } else {
-      startWebCamera();
+    mountedRef.current = true;
+
+    if (!athirNativeService.isNative()) {
+      setSupported(false);
+      setStatusMessage('الماسح والاكتشاف يعملان داخل تطبيق أندرويد فقط.');
+      return () => {
+        mountedRef.current = false;
+      };
     }
 
-    // 2. Local mDNS discovery
-    athirNativeService.startDiscovery();
-
-    // 3. Listen to ML Kit QR scans
-    const cleanupQr = athirNativeService.onQrScanned((data) => {
-      if (data.host && data.port && data.fingerprint && data.secret) {
-        handlePeerFound({
-          peerId: data.peerId || 'peer',
-          peerName: data.peerName || 'جهاز مستلم',
-          host: data.host,
-          port: data.port,
-          fingerprint: data.fingerprint,
-          secret: data.secret,
-        });
-      }
+    // Native CameraX + ML Kit QR scanning and mDNS discovery.
+    athirNativeService.startScanner().catch(() => {
+      setStatusMessage('تعذّر تشغيل الكاميرا. تحقّق من إذن الكاميرا.');
+    });
+    athirNativeService.startDiscovery().catch(() => {
+      setStatusMessage('تعذّر بدء اكتشاف الأجهزة القريبة.');
     });
 
-    // 4. Listen to discovered peers via mDNS
+    const cleanupQr = athirNativeService.onQrScanned((data) => {
+      if (!data.host || !data.port || !data.fingerprint || !data.secret) {
+        setStatusMessage('الرمز الممسوح لا يحتوي بيانات اقتران صالحة.');
+        return;
+      }
+      handlePeerFound({
+        peerId: data.peerId || 'peer',
+        peerName: data.peerName || 'جهاز مستلم',
+        host: data.host,
+        port: data.port,
+        fingerprint: data.fingerprint,
+        secret: data.secret,
+        source: 'qr',
+        requiresQr: false,
+      });
+    });
+
     const cleanupPeer = athirNativeService.onDeviceDiscovered((peer) => {
-      handlePeerFound(peer);
+      handlePeerFound({ ...peer, source: peer.source ?? 'mdns' });
     });
 
     return () => {
+      mountedRef.current = false;
       cleanupQr();
       cleanupPeer();
-      athirNativeService.stopScanner();
-      athirNativeService.stopDiscovery();
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-      }
+      athirNativeService.stopScanner().catch(() => {});
+      athirNativeService.stopDiscovery().catch(() => {});
     };
-  }, [startWebCamera, handlePeerFound]);
+  }, [handlePeerFound]);
 
   const handleConnect = async () => {
-    if (!discoveredPeer) return;
+    if (!discoveredPeer || !discoveredPeer.secret || connecting) return;
+    setConnectError('');
+    setConnecting(true);
     try {
       await athirNativeService.connectAndSend({
         host: discoveredPeer.host,
@@ -138,14 +93,24 @@ export const ScanScreen: React.FC = () => {
         secret: discoveredPeer.secret,
       });
       navigate('transfer');
-    } catch (e) {
-      console.error('Connection error:', e);
-      navigate('transfer');
+    } catch (error) {
+      const message =
+        error instanceof NativeOnlyError
+          ? 'النقل الحقيقي متاح داخل تطبيق أندرويد فقط.'
+          : error instanceof Error
+          ? error.message
+          : 'فشل بدء الاتصال بالجهاز.';
+      if (mountedRef.current) {
+        setConnectError(message.replace('MISSING_PAIRING_SECRET: ', ''));
+        setConnecting(false);
+      }
     }
   };
 
   const isFound = discoveredPeer !== null;
   const peerInitials = discoveredPeer ? discoveredPeer.peerName.slice(0, 2).toUpperCase() : 'AT';
+  const needsQr = discoveredPeer?.requiresQr === true || !discoveredPeer?.secret;
+  const canConnect = isFound && !needsQr && !connecting;
 
   return (
     <div className="page-view scan-page">
@@ -163,14 +128,6 @@ export const ScanScreen: React.FC = () => {
 
       <main style={{ padding: 0 }}>
         <div className="cam">
-          <video
-            ref={videoRef}
-            muted
-            playsInline
-            autoPlay
-            style={{ opacity: cameraActive ? 1 : 0, transition: 'opacity 0.4s ease' }}
-          />
-
           <div className="fr">
             <div className="vf">
               <b />
@@ -183,7 +140,7 @@ export const ScanScreen: React.FC = () => {
               className="g c"
               style={{ cursor: 'pointer' }}
             >
-              ضع رمز QR داخل الإطار
+              {supported ? 'ضع رمز QR داخل الإطار' : 'الكاميرا تعمل في تطبيق أندرويد'}
             </button>
           </div>
 
@@ -223,7 +180,13 @@ export const ScanScreen: React.FC = () => {
             </div>
 
             <i className="gp" />
-            <h2>{isFound ? 'تم العثور على جهاز' : 'البحث عن مستلمين…'}</h2>
+            <h2>
+              {isFound
+                ? needsQr
+                  ? 'جهاز قريب بدون اقتران'
+                  : 'تم العثور على جهاز'
+                : 'البحث عن مستلمين…'}
+            </h2>
 
             {isFound && discoveredPeer && (
               <div className="fi" style={{ display: 'block' }}>
@@ -231,9 +194,27 @@ export const ScanScreen: React.FC = () => {
                   <span className="ic">{peerInitials}</span>
                   <div className="gr">
                     <b>{discoveredPeer.peerName}</b>
-                    <small>قريب · جاهز للاستلام مشفّر</small>
+                    <small>
+                      {needsQr
+                        ? 'مكتشف عبر الشبكة · امسح رمز QR للاقتران الآمن'
+                        : 'مقترن · جاهز للاستلام مشفّر'}
+                    </small>
                   </div>
                 </div>
+
+                {connectError && (
+                  <p
+                    style={{
+                      marginTop: '14px',
+                      fontSize: '13px',
+                      color: 'var(--danger)',
+                      textAlign: 'center',
+                    }}
+                  >
+                    {connectError}
+                  </p>
+                )}
+
                 <button
                   type="button"
                   className="g c p big"
@@ -241,12 +222,28 @@ export const ScanScreen: React.FC = () => {
                     display: 'flex',
                     width: '100%',
                     marginTop: '22px',
+                    opacity: canConnect ? 1 : 0.4,
+                    pointerEvents: canConnect ? 'auto' : 'none',
                   }}
                   onClick={handleConnect}
+                  disabled={!canConnect}
                 >
-                  اتصال ونقل
+                  {needsQr ? 'امسح رمز QR للاقتران' : connecting ? 'جارٍ الاتصال…' : 'اتصال ونقل'}
                 </button>
               </div>
+            )}
+
+            {!isFound && statusMessage && (
+              <p
+                style={{
+                  marginTop: '12px',
+                  fontSize: '13px',
+                  color: 'var(--t2)',
+                  textAlign: 'center',
+                }}
+              >
+                {statusMessage}
+              </p>
             )}
           </div>
         </div>

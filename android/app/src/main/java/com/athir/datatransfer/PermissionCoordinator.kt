@@ -20,6 +20,19 @@ object PermissionCoordinator {
         }
     }
 
+    /**
+     * Writing a received file into the public Downloads/Athir directory needs
+     * WRITE_EXTERNAL_STORAGE only on Android 9 and below; from Android 10 the
+     * MediaStore pipeline is used and no write permission is required.
+     */
+    fun getRequiredWritePermissions(): Array<String> {
+        return if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+            arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        } else {
+            emptyArray()
+        }
+    }
+
     fun getRequiredNearbyPermissions(): Array<String> {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
@@ -59,7 +72,8 @@ object PermissionCoordinator {
         }
         val contacts = isPermissionGranted(context, Manifest.permission.READ_CONTACTS)
 
-        val allGranted = media && nearby && camera
+        val write = arePermissionsGranted(context, getRequiredWritePermissions())
+        val allGranted = media && nearby && camera && write
 
         return PermissionStatus(
             mediaGranted = media,
@@ -77,6 +91,7 @@ object PermissionCoordinator {
         allNeeded.addAll(getRequiredMediaPermissions())
         allNeeded.addAll(getRequiredNearbyPermissions())
         allNeeded.addAll(getRequiredCameraPermissions())
+        allNeeded.addAll(getRequiredWritePermissions())
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             allNeeded.addAll(getRequiredNotificationPermissions())
         }

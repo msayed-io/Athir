@@ -33,6 +33,7 @@ class AthirNativePlugin : Plugin() {
 
     override fun load() {
         super.load()
+        liveInstance = this
         transferEngine = TransferEngine(context)
         discoveryManager = DiscoveryManager(context)
         scannerEngine = ScannerEngine(context)
@@ -46,9 +47,9 @@ class AthirNativePlugin : Plugin() {
             put("androidVersion", Build.VERSION.RELEASE ?: "Android")
             put("sdkInt", Build.VERSION.SDK_INT)
             put("localIp", DiscoveryManager.getLocalIpAddress())
-            put("wifiDirectSupported", true)
-            put("hotspotSupported", true)
-            put("wifiAwareSupported", Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            put("wifiDirectSupported", DiscoveryManager.isWifiDirectSupported(context))
+            put("hotspotSupported", DiscoveryManager.isHotspotSupported(context))
+            put("wifiAwareSupported", DiscoveryManager.isWifiAwareSupported(context))
         }
         call.resolve(ret)
     }
@@ -66,17 +67,7 @@ class AthirNativePlugin : Plugin() {
 
     @PluginMethod
     override fun checkPermissions(call: PluginCall) {
-        val status = PermissionCoordinator.checkAllPermissions(context)
-        val ret = JSObject().apply {
-            put("mediaGranted", status.mediaGranted)
-            put("nearbyGranted", status.nearbyGranted)
-            put("cameraGranted", status.cameraGranted)
-            put("notificationGranted", status.notificationGranted)
-            put("contactsGranted", status.contactsGranted)
-            put("allGranted", status.allGranted)
-            put("sdkInt", status.sdkInt)
-        }
-        call.resolve(ret)
+        call.resolve(buildPermissionStatusObject())
     }
 
     @PluginMethod
@@ -87,12 +78,42 @@ class AthirNativePlugin : Plugin() {
             return
         }
 
-        // Request all missing permissions directly on activity
-        activity?.let { act ->
-            act.requestPermissions(missing.toTypedArray(), 1002)
+        // Request all missing permissions directly on the activity. The authoritative
+        // answer arrives asynchronously in handleRequestPermissionsResult below, which
+        // emits a "permissionsChanged" event with the real, post-dialog status.
+        val act = activity
+        if (act == null) {
+            call.reject("Activity is not available")
+            return
         }
-        call.resolve(JSObject().put("requested", true))
+        act.requestPermissions(missing.toTypedArray(), REQUEST_CODE_PERMISSIONS)
+        call.resolve(JSObject().put("requested", true).put("code", REQUEST_CODE_PERMISSIONS))
     }
+
+    /**
+     * Called from MainActivity.onRequestPermissionsResult (see MainActivity.java) as soon as
+     * the system permission dialog is answered, so the UI can publish the real, post-dialog
+     * status instead of assuming a grant. MainActivity is used because Capacitor 8 only
+     * forwards that callback to legacy plugins; a registered @CapacitorPlugin never sees it.
+     */
+    internal fun publishPermissionState(requestCode: Int) {
+        if (requestCode != REQUEST_CODE_PERMISSIONS) return
+        notifyListeners("permissionsChanged", buildPermissionStatusObject())
+    }
+
+    private fun buildPermissionStatusObject(): JSObject {
+        val status = PermissionCoordinator.checkAllPermissions(context)
+        return JSObject().apply {
+            put("mediaGranted", status.mediaGranted)
+            put("nearbyGranted", status.nearbyGranted)
+            put("cameraGranted", status.cameraGranted)
+            put("notificationGranted", status.notificationGranted)
+            put("contactsGranted", status.contactsGranted)
+            put("allGranted", status.allGranted)
+            put("sdkInt", status.sdkInt)
+        }
+    }
+
 
     @PluginMethod
     fun getMediaCatalog(call: PluginCall) {
@@ -239,7 +260,8 @@ class AthirNativePlugin : Plugin() {
                 val qrDataUrl = QrEncoder.generateQrDataUrl(qrString, 512)
 
                 // Start advertising via mDNS
-                discoveryManager?.startAdvertising(displayName, activeServerPort, deviceId, fp, secret)
+                // The session secret is intentionally NOT advertised over mDNS.
+                discoveryManager?.startAdvertising(displayName, activeServerPort, deviceId, fp)
 
                 // Start listening via TLS ServerSocket in background thread
                 thread(name = "Athir-ReceiverThread") {
@@ -287,6 +309,8 @@ class AthirNativePlugin : Plugin() {
                     put("port", peer.port)
                     put("fingerprint", peer.fingerprint)
                     put("secret", peer.secret)
+                    put("source", peer.source)
+                    put("requiresQr", peer.secret.isBlank())
                 }
                 notifyListeners("deviceDiscovered", data)
             }
@@ -333,8 +357,15 @@ class AthirNativePlugin : Plugin() {
             } catch (ignored: Exception) {}
         }
 
-        if (host.isNullOrBlank() || port <= 0 || fp.isBlank() || secret.isBlank()) {
-            call.reject("Missing connection details: host, port, fingerprint, or secret")
+        if (host.isNullOrBlank() || port <= 0 || fp.isBlank()) {
+            call.reject("Missing connection details: host, port, or certificate fingerprint")
+            return
+        }
+        if (secret.isBlank()) {
+            call.reject(
+                "MISSING_PAIRING_SECRET: this device was found over mDNS, which never carries " +
+                    "the session secret. Scan the receiver QR code to pair securely."
+            )
             return
         }
 
@@ -421,6 +452,7 @@ class AthirNativePlugin : Plugin() {
                     override fun onQrScanned(rawContent: String, parsedPayload: JSONObject?) {
                         val data = JSObject().apply {
                             put("rawContent", rawContent)
+                            put("source", DiscoveryManager.SOURCE_QR)
                             if (parsedPayload != null) {
                                 put("host", parsedPayload.optString("host"))
                                 put("port", parsedPayload.optInt("port"))
@@ -448,6 +480,23 @@ class AthirNativePlugin : Plugin() {
     fun stopScanner(call: PluginCall) {
         scannerEngine?.stopScanning()
         call.resolve(JSObject().put("stopped", true))
+    }
+
+    companion object {
+        private const val REQUEST_CODE_PERMISSIONS = 1002
+
+        @Volatile
+        private var liveInstance: AthirNativePlugin? = null
+
+        /** Invoked by MainActivity after the system permission dialog is answered. */
+        @JvmStatic
+        fun onActivityPermissionResult(requestCode: Int) {
+            liveInstance?.publishPermissionState(requestCode)
+        }
+
+        /** Exposed to MainActivity so it can decide whether to forward the result at all. */
+        @JvmStatic
+        fun permissionRequestCode(): Int = REQUEST_CODE_PERMISSIONS
     }
 
     private fun createTransferListener(): TransferEngine.TransferListener {
@@ -479,6 +528,14 @@ class AthirNativePlugin : Plugin() {
                     put("totalMB", Math.round((totalBytes / (1024.0 * 1024.0)) * 10.0) / 10.0)
                 }
                 notifyListeners("transferProgress", data)
+            }
+
+            override fun onIntegrityVerified(fileName: String, verified: Boolean) {
+                val data = JSObject().apply {
+                    put("fileName", fileName)
+                    put("verified", verified)
+                }
+                notifyListeners("fileIntegrity", data)
             }
 
             override fun onFileCompleted(fileName: String, sizeBytes: Long, isReceived: Boolean) {

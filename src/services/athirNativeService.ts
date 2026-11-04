@@ -1,7 +1,26 @@
 import QRCode from 'qrcode';
 import { Capacitor, registerPlugin, PluginListenerHandle } from '@capacitor/core';
 import { CategoryType } from '../components/send/CategoryTabs';
-import { FileTuple, RecentTuple } from '../types';
+import { FileTuple } from '../types';
+
+/**
+ * Bridge to the local `AthirNative` Capacitor plugin (Kotlin).
+ *
+ * Architecture rule enforced in this file: the WebView never simulates hardware,
+ * network, filesystem, permissions or camera behaviour. When the app runs inside a
+ * plain browser there is no native layer, so every hardware-backed capability
+ * reports an explicit "native only" condition instead of inventing data.
+ * File bytes never cross this bridge: only identifiers, URIs and aggregated
+ * progress events are exchanged.
+ */
+
+export class NativeOnlyError extends Error {
+  code = 'NATIVE_ONLY';
+  constructor(capability: string) {
+    super(`${capability} requires the Athir Android application (com.athir.datatransfer).`);
+    this.name = 'NativeOnlyError';
+  }
+}
 
 export interface DeviceInfo {
   deviceId: string;
@@ -12,6 +31,7 @@ export interface DeviceInfo {
   wifiDirectSupported: boolean;
   hotspotSupported: boolean;
   wifiAwareSupported: boolean;
+  platform: 'native' | 'web';
 }
 
 export interface PermissionStatus {
@@ -22,6 +42,7 @@ export interface PermissionStatus {
   contactsGranted: boolean;
   allGranted: boolean;
   sdkInt: number;
+  supported: boolean;
 }
 
 export interface CatalogItem {
@@ -54,6 +75,10 @@ export interface DiscoveredPeer {
   port: number;
   fingerprint: string;
   secret: string;
+  /** 'qr' when the pairing secret came from a scanned QR code, 'mdns' otherwise. */
+  source: 'qr' | 'mdns';
+  /** True when the peer was discovered without a pairing secret and a QR scan is required. */
+  requiresQr: boolean;
 }
 
 export interface TransferProgressEvent {
@@ -84,8 +109,21 @@ export interface AthirNativePluginInterface {
   setDisplayName(options: { name: string }): Promise<{ success: boolean; name: string }>;
   checkPermissions(): Promise<PermissionStatus>;
   requestPermissions(): Promise<{ requested: boolean }>;
-  getMediaCatalog(options: { category: string; query?: string; limit?: number }): Promise<{ category: string; items: CatalogItem[]; count: number }>;
-  updateSelection(options: { action: 'add' | 'remove' | 'toggle'; id: string; name: string; sizeMB: number; sizeBytes: number; uri: string; mimeType?: string; category?: string }): Promise<{ id: string; isSelected: boolean; totalCount: number; totalMB: number; totalBytes: number }>;
+  getMediaCatalog(options: { category: string; query?: string; limit?: number }): Promise<{
+    category: string;
+    items: CatalogItem[];
+    count: number;
+  }>;
+  updateSelection(options: {
+    action: 'add' | 'remove' | 'toggle';
+    id: string;
+    name: string;
+    sizeMB: number;
+    sizeBytes: number;
+    uri: string;
+    mimeType?: string;
+    category?: string;
+  }): Promise<{ id: string; isSelected: boolean; totalCount: number; totalMB: number; totalBytes: number }>;
   getSelection(): Promise<{ items: CatalogItem[]; totalCount: number; totalMB: number; totalBytes: number }>;
   clearSelection(): Promise<{ success: boolean }>;
   startReceiving(): Promise<ReceiveSession>;
@@ -106,15 +144,18 @@ export interface AthirNativePluginInterface {
 
 const AthirNative = registerPlugin<AthirNativePluginInterface>('AthirNative');
 
-// Web mock state
-let mockSessionSecret = 'athir_' + Math.random().toString(36).substring(2, 10);
-const webListeners = new Map<string, Set<(data: any) => void>>();
-
-function emitWebEvent(eventName: string, data: any) {
-  const set = webListeners.get(eventName);
-  if (set) {
-    set.forEach((fn) => fn(data));
+/** Every hardware-backed call funnels through here so browser behaviour stays explicit. */
+function requireNative(capability: string): void {
+  if (!Capacitor.isNativePlatform()) {
+    throw new NativeOnlyError(capability);
   }
+}
+
+function subscribeNative<T>(eventName: string, callback: (data: T) => void): () => void {
+  const handlePromise = AthirNative.addListener(eventName, callback);
+  return () => {
+    handlePromise.then((h) => h.remove()).catch(() => {});
+  };
 }
 
 export const athirNativeService = {
@@ -122,15 +163,13 @@ export const athirNativeService = {
     return Capacitor.isNativePlatform();
   },
 
-  async generateQrCode(content: String): Promise<string> {
+  /** Real QR image generation (used only as a fallback when the native encoder is unavailable). */
+  async generateQrCode(content: string): Promise<string> {
     try {
-      return await QRCode.toDataURL(content as string, {
+      return await QRCode.toDataURL(content, {
         margin: 2,
         width: 512,
-        color: {
-          dark: '#000000',
-          light: '#ffffff',
-        },
+        color: { dark: '#000000', light: '#ffffff' },
       });
     } catch (e) {
       console.error('Error generating QR code:', e);
@@ -139,372 +178,215 @@ export const athirNativeService = {
   },
 
   async getDeviceInfo(): Promise<DeviceInfo> {
-    if (this.isNative()) {
-      try {
-        return await AthirNative.getDeviceInfo();
-      } catch (e) {
-        console.warn('Native getDeviceInfo error, falling back:', e);
-      }
-    }
-    return {
-      deviceId: 'web-' + Math.random().toString(36).substring(2, 9),
-      displayName: 'أثير (Web)',
-      androidVersion: 'Web Client',
-      sdkInt: 36,
-      localIp: '127.0.0.1',
-      wifiDirectSupported: false,
-      hotspotSupported: false,
-      wifiAwareSupported: false,
-    };
+    requireNative('Device identity');
+    return AthirNative.getDeviceInfo();
   },
 
   async checkPermissions(): Promise<PermissionStatus> {
-    if (this.isNative()) {
-      try {
-        return await AthirNative.checkPermissions();
-      } catch (e) {
-        console.warn('Native checkPermissions error:', e);
-      }
+    if (!this.isNative()) {
+      return {
+        mediaGranted: false,
+        nearbyGranted: false,
+        cameraGranted: false,
+        notificationGranted: false,
+        contactsGranted: false,
+        allGranted: false,
+        sdkInt: 0,
+        supported: false,
+      };
     }
-    return {
-      mediaGranted: true,
-      nearbyGranted: true,
-      cameraGranted: true,
-      notificationGranted: true,
-      contactsGranted: true,
-      allGranted: true,
-      sdkInt: 36,
-    };
+    const status = await AthirNative.checkPermissions();
+    return { ...status, supported: true };
   },
 
   async requestPermissions(): Promise<PermissionStatus> {
-    if (this.isNative()) {
-      try {
-        await AthirNative.requestPermissions();
-        return await AthirNative.checkPermissions();
-      } catch (e) {
-        console.warn('Native requestPermissions error:', e);
-      }
-    }
-    return this.checkPermissions();
+    requireNative('Runtime permissions');
+    await AthirNative.requestPermissions();
+    // The authoritative answer is pushed through `permissionsChanged`; this immediate
+    // read is only a best-effort snapshot and must never be treated as the final state.
+    return { ...(await AthirNative.checkPermissions()), supported: true };
   },
 
   async getMediaCatalog(category: CategoryType, query?: string): Promise<CatalogItem[]> {
-    if (this.isNative()) {
-      try {
-        const res = await AthirNative.getMediaCatalog({ category, query, limit: 120 });
-        if (res && res.items && res.items.length > 0) {
-          return res.items;
-        }
-      } catch (e) {
-        console.warn('Native getMediaCatalog error:', e);
-      }
+    if (!this.isNative()) {
+      // No fabrication: a browser has no device media catalog to enumerate.
+      return [];
     }
-    return [];
+    const res = await AthirNative.getMediaCatalog({ category, query, limit: 120 });
+    return res?.items ?? [];
   },
 
   async updateSelection(action: 'add' | 'remove' | 'toggle', item: CatalogItem) {
-    if (this.isNative()) {
-      try {
-        return await AthirNative.updateSelection({
-          action,
-          id: item.id,
-          name: item.name,
-          sizeMB: item.sizeMB,
-          sizeBytes: item.sizeBytes,
-          uri: item.uri,
-          mimeType: item.mimeType,
-          category: item.category,
-        });
-      } catch (e) {
-        console.warn('Native updateSelection error:', e);
-      }
+    if (!this.isNative()) {
+      return {
+        id: item.id,
+        isSelected: action !== 'remove',
+        totalCount: 0,
+        totalMB: 0,
+        totalBytes: 0,
+      };
     }
-    return { id: item.id, isSelected: action !== 'remove', totalCount: 1, totalMB: item.sizeMB, totalBytes: item.sizeBytes };
+    return AthirNative.updateSelection({
+      action,
+      id: item.id,
+      name: item.name,
+      sizeMB: item.sizeMB,
+      sizeBytes: item.sizeBytes,
+      uri: item.uri,
+      mimeType: item.mimeType,
+      category: item.category,
+    });
   },
 
   async getSelection(): Promise<{ items: CatalogItem[]; totalCount: number; totalMB: number; totalBytes: number }> {
-    if (this.isNative()) {
-      try {
-        return await AthirNative.getSelection();
-      } catch (e) {
-        console.warn('Native getSelection error:', e);
-      }
+    if (!this.isNative()) {
+      return { items: [], totalCount: 0, totalMB: 0, totalBytes: 0 };
     }
-    return { items: [], totalCount: 0, totalMB: 0, totalBytes: 0 };
+    return AthirNative.getSelection();
   },
 
   async clearSelection(): Promise<void> {
-    if (this.isNative()) {
-      try {
-        await AthirNative.clearSelection();
-      } catch (e) {
-        console.warn('Native clearSelection error:', e);
-      }
-    }
+    if (!this.isNative()) return;
+    await AthirNative.clearSelection();
   },
 
   async startReceiving(): Promise<ReceiveSession> {
-    if (this.isNative()) {
-      try {
-        const session = await AthirNative.startReceiving();
-        if (!session.qrDataUrl && session.qrPayload) {
-          session.qrDataUrl = await this.generateQrCode(session.qrPayload);
-        }
-        return session;
-      } catch (e) {
-        console.warn('Native startReceiving error:', e);
-      }
+    requireNative('Starting a receiving session');
+    const session = await AthirNative.startReceiving();
+    if (!session.qrDataUrl && session.qrPayload) {
+      session.qrDataUrl = await this.generateQrCode(session.qrPayload);
     }
-
-    // Web fallback with real generated QR Data URL
-    mockSessionSecret = 'athir_' + Math.random().toString(36).substring(2, 10);
-    const mockQrPayload = JSON.stringify({
-      v: 1,
-      id: 'web-device',
-      name: 'أثير (Web)',
-      host: '127.0.0.1',
-      port: 8888,
-      fp: 'AA:BB:CC:DD:EE:FF',
-      secret: mockSessionSecret,
-      transport: 'lan',
-    });
-
-    const generatedQr = await this.generateQrCode(mockQrPayload);
-
-    return {
-      deviceId: 'web-device',
-      displayName: 'أثير (Web)',
-      host: '127.0.0.1',
-      port: 8888,
-      fingerprint: 'AA:BB:CC:DD:EE:FF',
-      secret: mockSessionSecret,
-      qrPayload: mockQrPayload,
-      qrDataUrl: generatedQr,
-    };
+    return session;
   },
 
   async stopReceiving(): Promise<void> {
-    if (this.isNative()) {
-      try {
-        await AthirNative.stopReceiving();
-      } catch (e) {
-        console.warn('Native stopReceiving error:', e);
-      }
-    }
+    if (!this.isNative()) return;
+    await AthirNative.stopReceiving();
   },
 
   async startDiscovery(): Promise<void> {
-    if (this.isNative()) {
-      try {
-        await AthirNative.startDiscovery();
-      } catch (e) {
-        console.warn('Native startDiscovery error:', e);
-      }
-    }
+    requireNative('Local device discovery');
+    await AthirNative.startDiscovery();
   },
 
   async stopDiscovery(): Promise<void> {
-    if (this.isNative()) {
-      try {
-        await AthirNative.stopDiscovery();
-      } catch (e) {
-        console.warn('Native stopDiscovery error:', e);
-      }
-    }
+    if (!this.isNative()) return;
+    await AthirNative.stopDiscovery();
   },
 
-  async connectAndSend(options: { host?: string; port?: number; fingerprint?: string; secret?: string; qrPayload?: string }): Promise<void> {
-    if (this.isNative()) {
-      await AthirNative.connectAndSend(options);
-      return;
-    }
-
-    // Simulate transfer progress for Web preview
-    let sent = 0;
-    const total = 50 * 1024 * 1024;
-    const timer = setInterval(() => {
-      sent += 2.5 * 1024 * 1024;
-      const pct = Math.min(100, Math.floor((sent / total) * 100));
-      emitWebEvent('transferProgress', {
-        bytesTransferred: sent,
-        totalBytes: total,
-        speedBytesPerSec: 15 * 1024 * 1024,
-        speedDisplay: '15.0 MB/s',
-        currentFileName: 'Athir_Data.zip',
-        fileIndex: 0,
-        totalFiles: 1,
-        percent: pct,
-        sentMB: Math.round((sent / (1024 * 1024)) * 10) / 10,
-        totalMB: 50.0,
-      });
-
-      if (sent >= total) {
-        clearInterval(timer);
-        emitWebEvent('transferComplete', { success: true, isSender: true });
-      }
-    }, 200);
+  async connectAndSend(options: {
+    host?: string;
+    port?: number;
+    fingerprint?: string;
+    secret?: string;
+    qrPayload?: string;
+  }): Promise<void> {
+    requireNative('Peer-to-peer transfer');
+    await AthirNative.connectAndSend(options);
   },
 
   async cancelTransfer(): Promise<void> {
-    if (this.isNative()) {
-      try {
-        await AthirNative.cancelTransfer();
-      } catch (e) {
-        console.warn('Native cancelTransfer error:', e);
-      }
-    }
+    if (!this.isNative()) return;
+    await AthirNative.cancelTransfer().catch(() => {});
   },
 
   async pauseTransfer(): Promise<void> {
-    if (this.isNative()) {
-      try {
-        await AthirNative.pauseTransfer();
-      } catch (e) {
-        console.warn('Native pauseTransfer error:', e);
-      }
-    }
+    if (!this.isNative()) return;
+    await AthirNative.pauseTransfer().catch(() => {});
   },
 
   async resumeTransfer(): Promise<void> {
-    if (this.isNative()) {
-      try {
-        await AthirNative.resumeTransfer();
-      } catch (e) {
-        console.warn('Native resumeTransfer error:', e);
-      }
-    }
+    if (!this.isNative()) return;
+    await AthirNative.resumeTransfer().catch(() => {});
   },
 
   async sendChatMessage(text: string): Promise<void> {
-    if (this.isNative()) {
-      try {
-        await AthirNative.sendChatMessage({ text });
-      } catch (e) {
-        console.warn('Native sendChatMessage error:', e);
-      }
+    if (!this.isNative()) {
+      throw new NativeOnlyError('Chat over the transfer session');
     }
+    await AthirNative.sendChatMessage({ text });
   },
 
   async getTransferHistory(): Promise<HistoryItem[]> {
-    if (this.isNative()) {
-      try {
-        const res = await AthirNative.getTransferHistory();
-        return res.records;
-      } catch (e) {
-        console.warn('Native getTransferHistory error:', e);
-      }
+    if (!this.isNative()) {
+      return [];
     }
-    return [];
+    const res = await AthirNative.getTransferHistory();
+    return res?.records ?? [];
   },
 
   async clearTransferHistory(): Promise<void> {
-    if (this.isNative()) {
-      try {
-        await AthirNative.clearTransferHistory();
-      } catch (e) {
-        console.warn('Native clearTransferHistory error:', e);
-      }
-    }
+    if (!this.isNative()) return;
+    await AthirNative.clearTransferHistory();
   },
 
   async startScanner(): Promise<void> {
-    if (this.isNative()) {
-      try {
-        await AthirNative.startScanner();
-      } catch (e) {
-        console.warn('Native startScanner error:', e);
-      }
-    }
+    requireNative('QR scanning');
+    await AthirNative.startScanner();
   },
 
   async stopScanner(): Promise<void> {
-    if (this.isNative()) {
-      try {
-        await AthirNative.stopScanner();
-      } catch (e) {
-        console.warn('Native stopScanner error:', e);
-      }
-    }
+    if (!this.isNative()) return;
+    await AthirNative.stopScanner();
   },
 
   onTransferProgress(callback: (event: TransferProgressEvent) => void): () => void {
-    if (this.isNative()) {
-      const handlePromise = AthirNative.addListener('transferProgress', callback);
-      return () => {
-        handlePromise.then((h) => h.remove());
-      };
-    } else {
-      if (!webListeners.has('transferProgress')) webListeners.set('transferProgress', new Set());
-      webListeners.get('transferProgress')!.add(callback);
-      return () => {
-        webListeners.get('transferProgress')?.delete(callback);
-      };
-    }
+    if (!this.isNative()) return () => {};
+    return subscribeNative('transferProgress', callback);
   },
 
   onTransferComplete(callback: (data: { success: boolean; isSender: boolean }) => void): () => void {
-    if (this.isNative()) {
-      const handlePromise = AthirNative.addListener('transferComplete', callback);
-      return () => {
-        handlePromise.then((h) => h.remove());
-      };
-    } else {
-      if (!webListeners.has('transferComplete')) webListeners.set('transferComplete', new Set());
-      webListeners.get('transferComplete')!.add(callback);
-      return () => {
-        webListeners.get('transferComplete')?.delete(callback);
-      };
-    }
+    if (!this.isNative()) return () => {};
+    return subscribeNative('transferComplete', callback);
   },
 
   onTransferError(callback: (data: { error: string }) => void): () => void {
-    if (this.isNative()) {
-      const handlePromise = AthirNative.addListener('transferError', callback);
-      return () => {
-        handlePromise.then((h) => h.remove());
-      };
-    }
-    return () => {};
+    if (!this.isNative()) return () => {};
+    return subscribeNative('transferError', callback);
+  },
+
+  onFileIntegrity(callback: (data: { fileName: string; verified: boolean }) => void): () => void {
+    if (!this.isNative()) return () => {};
+    return subscribeNative('fileIntegrity', callback);
+  },
+
+  onPermissionsChanged(callback: (status: PermissionStatus) => void): () => void {
+    if (!this.isNative()) return () => {};
+    return subscribeNative('permissionsChanged', (data: PermissionStatus) =>
+      callback({ ...data, supported: true })
+    );
   },
 
   onDeviceDiscovered(callback: (peer: DiscoveredPeer) => void): () => void {
-    if (this.isNative()) {
-      const handlePromise = AthirNative.addListener('deviceDiscovered', callback);
-      return () => {
-        handlePromise.then((h) => h.remove());
-      };
-    }
-    return () => {};
+    if (!this.isNative()) return () => {};
+    return subscribeNative('deviceDiscovered', callback);
   },
 
   onDeviceLost(callback: (data: { peerId: string }) => void): () => void {
-    if (this.isNative()) {
-      const handlePromise = AthirNative.addListener('deviceLost', callback);
-      return () => {
-        handlePromise.then((h) => h.remove());
-      };
-    }
-    return () => {};
+    if (!this.isNative()) return () => {};
+    return subscribeNative('deviceLost', callback);
   },
 
-  onQrScanned(callback: (data: { rawContent: string; host?: string; port?: number; fingerprint?: string; secret?: string; peerName?: string; peerId?: string }) => void): () => void {
-    if (this.isNative()) {
-      const handlePromise = AthirNative.addListener('qrScanned', callback);
-      return () => {
-        handlePromise.then((h) => h.remove());
-      };
-    }
-    return () => {};
+  onQrScanned(
+    callback: (data: {
+      rawContent: string;
+      host?: string;
+      port?: number;
+      fingerprint?: string;
+      secret?: string;
+      peerName?: string;
+      peerId?: string;
+      source?: string;
+    }) => void
+  ): () => void {
+    if (!this.isNative()) return () => {};
+    return subscribeNative('qrScanned', callback);
   },
 
   onChatMessage(callback: (data: { message: string }) => void): () => void {
-    if (this.isNative()) {
-      const handlePromise = AthirNative.addListener('messageReceived', callback);
-      return () => {
-        handlePromise.then((h) => h.remove());
-      };
-    }
-    return () => {};
+    if (!this.isNative()) return () => {};
+    return subscribeNative('messageReceived', callback);
   },
 };
+
+export type { FileTuple };

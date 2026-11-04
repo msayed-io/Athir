@@ -4,7 +4,6 @@ import { RadarVisual } from '../components/common/RadarVisual';
 import { BottomNav } from '../components/common/BottomNav';
 import { Icon } from '../assets/icons/SvgSprite';
 import { useAppNavigation } from '../services/navigationService';
-import { storageService } from '../services/storageService';
 import { athirNativeService, HistoryItem } from '../services/athirNativeService';
 import { RecentTuple } from '../types';
 import './HomeScreen.css';
@@ -15,15 +14,14 @@ export const HomeScreen: React.FC = () => {
 
   useEffect(() => {
     document.title = 'الرئيسية';
-    athirNativeService.getTransferHistory().then((records: HistoryItem[]) => {
-      if (records && records.length > 0) {
-        setRecentItems(records.slice(0, 5).map((r) => [r.fileName, r.fileSizeDisplay, r.direction]));
-      } else {
-        setRecentItems(storageService.getRecentTransfers().slice(0, 5));
-      }
-    }).catch(() => {
-      setRecentItems(storageService.getRecentTransfers().slice(0, 5));
-    });
+    // Recent transfers come from the native SQLite history only. There is no local
+    // fallback: an empty list means no real transfer has happened on this device yet.
+    athirNativeService
+      .getTransferHistory()
+      .then((records: HistoryItem[]) => {
+        setRecentItems(records.slice(0, 5).map((r) => [r.fileName, r.fileSizeDisplay, r.status]));
+      })
+      .catch(() => setRecentItems([]));
   }, []);
 
   return (

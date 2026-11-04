@@ -4,8 +4,19 @@ import { HeaderTop } from '../components/common/HeaderTop';
 import { BottomBar } from '../components/common/BottomBar';
 import { Icon } from '../assets/icons/SvgSprite';
 import { useAppNavigation } from '../services/navigationService';
-import { athirNativeService } from '../services/athirNativeService';
+import { athirNativeService, PermissionStatus } from '../services/athirNativeService';
 import './PrepareScreen.css';
+
+const EMPTY_STATUS: PermissionStatus = {
+  mediaGranted: false,
+  nearbyGranted: false,
+  cameraGranted: false,
+  notificationGranted: false,
+  contactsGranted: false,
+  allGranted: false,
+  sdkInt: 0,
+  supported: false,
+};
 
 export const PrepareScreen: React.FC = () => {
   const { navigate, goBack } = useAppNavigation();
@@ -14,43 +25,65 @@ export const PrepareScreen: React.FC = () => {
     document.title = 'التحضيرات';
   }, []);
 
-  const [perm1Granted, setPerm1Granted] = useState(false);
-  const [perm2Granted, setPerm2Granted] = useState(false);
-  const [sdkVersion, setSdkVersion] = useState(36);
+  const [status, setStatus] = useState<PermissionStatus>(EMPTY_STATUS);
+  const [requesting, setRequesting] = useState(false);
+  const [errorText, setErrorText] = useState('');
+
+  const applyStatus = useCallback((next: PermissionStatus) => {
+    setStatus(next);
+  }, []);
 
   const checkPerms = useCallback(async () => {
-    const status = await athirNativeService.checkPermissions();
-    setPerm1Granted(status.nearbyGranted);
-    setPerm2Granted(status.mediaGranted);
-    setSdkVersion(status.sdkInt);
-  }, []);
+    if (!athirNativeService.isNative()) {
+      setStatus(EMPTY_STATUS);
+      return;
+    }
+    try {
+      applyStatus(await athirNativeService.checkPermissions());
+    } catch {
+      setStatus(EMPTY_STATUS);
+    }
+  }, [applyStatus]);
 
   useEffect(() => {
     checkPerms();
-  }, [checkPerms]);
+    // The authoritative post-dialog status always arrives through this event.
+    const cleanup = athirNativeService.onPermissionsChanged((next) => {
+      applyStatus(next);
+      setRequesting(false);
+    });
+    return cleanup;
+  }, [checkPerms, applyStatus]);
+
+  const requestAll = useCallback(async () => {
+    setErrorText('');
+    setRequesting(true);
+    try {
+      await athirNativeService.requestPermissions();
+    } catch (e) {
+      setRequesting(false);
+      setErrorText('تعذّر طلب الأذونات. افتح إعدادات التطبيق لمنحها يدويًا.');
+    }
+  }, []);
+
+  const sdkVersion = status.sdkInt || 33;
+  const perm1Granted = status.nearbyGranted && status.cameraGranted;
+  const perm2Granted = status.mediaGranted;
+  const count = (perm1Granted ? 1 : 0) + (perm2Granted ? 1 : 0);
+  const isReady = status.supported && status.allGranted;
+  const unsupported = !status.supported;
 
   const handleTogglePerm1 = async (val: boolean) => {
     if (val) {
-      const res = await athirNativeService.requestPermissions();
-      setPerm1Granted(res.nearbyGranted);
-      setPerm2Granted(res.mediaGranted);
-    } else {
-      setPerm1Granted(false);
+      await requestAll();
     }
   };
 
   const handleTogglePerm2 = async (val: boolean) => {
     if (val) {
-      const res = await athirNativeService.requestPermissions();
-      setPerm1Granted(res.nearbyGranted);
-      setPerm2Granted(res.mediaGranted);
-    } else {
-      setPerm2Granted(false);
+      await requestAll();
     }
   };
-
-  const count = (perm1Granted ? 1 : 0) + (perm2Granted ? 1 : 0);
-  const isReady = count === 2;
 
   const handleNext = () => {
     if (!isReady) return;
@@ -87,7 +120,9 @@ export const PrepareScreen: React.FC = () => {
         </div>
 
         <h1>جهّز جهازك</h1>
-        <p className="sub">خطوتان لاكتشاف الأجهزة القريبة</p>
+        <p className="sub">
+          {unsupported ? 'الأذونات تُدار داخل تطبيق أندرويد' : 'خطوتان لاكتشاف الأجهزة القريبة'}
+        </p>
 
         <div className="card" style={{ marginTop: '24px' }}>
           <div className="pm">
@@ -100,13 +135,14 @@ export const PrepareScreen: React.FC = () => {
                 <Switch
                   aria-label="منح إذن الاتصال القريب"
                   checked={perm1Granted}
+                  disabled={unsupported || requesting}
                   onCheckedChange={handleTogglePerm1}
                 />
               </div>
             </div>
             <p>
               {sdkVersion >= 33
-                ? 'إذن الاتصال بالأجهزة القريبة بدون الحاجة للوصول إلى موقعك الجغرافي.'
+                ? 'إذن الاتصال بالأجهزة القريبة بدون الحاجة للوصول إلى موقعك الجغرافي، مع إذن الكاميرا لمسح رمز الاقتران.'
                 : 'ابحث عن جهاز قريب قام بتثبيت تطبيق أثير ويمكنك النقل مباشرة إليه.'}
             </p>
           </div>
@@ -121,6 +157,7 @@ export const PrepareScreen: React.FC = () => {
                 <Switch
                   aria-label="تشغيل أذونات التخزين والوسائط"
                   checked={perm2Granted}
+                  disabled={unsupported || requesting}
                   onCheckedChange={handleTogglePerm2}
                 />
               </div>
@@ -132,11 +169,23 @@ export const PrepareScreen: React.FC = () => {
             </p>
           </div>
         </div>
+
+        {errorText && (
+          <p style={{ marginTop: '14px', fontSize: '13px', color: 'var(--danger)', textAlign: 'center' }}>
+            {errorText}
+          </p>
+        )}
+
+        {!unsupported && !isReady && count === 2 && (
+          <p style={{ marginTop: '14px', fontSize: '13px', color: 'var(--t2)', textAlign: 'center' }}>
+            بعض الأذونات ما زالت مرفوضة. اضغط المفتاح مرة أخرى أو امنحها من إعدادات النظام.
+          </p>
+        )}
       </main>
 
       <BottomBar>
         <div className="g bx">
-          <span id="sm">{count} / 2</span>
+          <span id="sm">{unsupported ? '—' : `${count} / 2`}</span>
           <button
             type="button"
             className="g c p"

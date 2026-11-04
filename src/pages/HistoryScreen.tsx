@@ -3,7 +3,6 @@ import { HeaderTop } from '../components/common/HeaderTop';
 import { BottomNav } from '../components/common/BottomNav';
 import { Icon } from '../assets/icons/SvgSprite';
 import { useAppNavigation } from '../services/navigationService';
-import { storageService } from '../services/storageService';
 import { athirNativeService, HistoryItem } from '../services/athirNativeService';
 import { RecentTuple } from '../types';
 import './HistoryScreen.css';
@@ -17,21 +16,18 @@ export const HistoryScreen: React.FC = () => {
   }, []);
 
   const loadHistory = useCallback(async () => {
+    // Authoritative source: native SQLite history written by real transfers only.
     try {
       const nativeRecords: HistoryItem[] = await athirNativeService.getTransferHistory();
-      if (nativeRecords && nativeRecords.length > 0) {
-        const tuples: RecentTuple[] = nativeRecords.map((r) => [
-          r.fileName,
-          r.fileSizeDisplay,
-          r.direction,
-        ]);
-        setItems(tuples);
-        return;
-      }
+      const tuples: RecentTuple[] = (nativeRecords ?? []).map((r) => [
+        r.fileName,
+        r.fileSizeDisplay,
+        `${r.direction} · ${r.status}`,
+      ]);
+      setItems(tuples);
     } catch {
-      // Fallback to storage
+      setItems([]);
     }
-    setItems(storageService.getRecentTransfers());
   }, []);
 
   useEffect(() => {
@@ -44,7 +40,6 @@ export const HistoryScreen: React.FC = () => {
     } catch {
       // Ignore
     }
-    storageService.clearRecentTransfers();
     setItems([]);
   };
 

@@ -54,6 +54,8 @@ export const TransferScreen: React.FC = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [txText, setTxText] = useState('');
   const [topPbOpacity, setTopPbOpacity] = useState(0);
+  const [errorMessage, setErrorMessage] = useState('');
+  const supported = athirNativeService.isNative();
 
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -93,23 +95,31 @@ export const TransferScreen: React.FC = () => {
     const cleanupComplete = athirNativeService.onTransferComplete(() => {
       setFin(true);
       setRun(false);
-      if (files.length > 0) {
-        storageService.addRecentTransfer([
-          files[0][0],
-          `${files[0][1]} MB`,
-          'أُرسل',
-        ]);
-      }
     });
 
     const cleanupChat = athirNativeService.onChatMessage((data) => {
       setMessages((prev) => [...prev, data.message]);
     });
 
+    const cleanupError = athirNativeService.onTransferError((data) => {
+      setErrorMessage(data.error || 'فشل النقل');
+      setRun(false);
+    });
+
+    const cleanupIntegrity = athirNativeService.onFileIntegrity((data) => {
+      if (!data.verified) {
+        setErrorMessage(
+          `فشل التحقق من سلامة الملف "${data.fileName}" بعد النقل. أعد المحاولة.`
+        );
+      }
+    });
+
     return () => {
       cleanupProgress();
       cleanupComplete();
       cleanupChat();
+      cleanupError();
+      cleanupIntegrity();
     };
   }, [files]);
 
@@ -224,6 +234,28 @@ export const TransferScreen: React.FC = () => {
               : 'متوقف مؤقتًا'}
           </span>
         </div>
+
+        {!supported && (
+          <div
+            className="card"
+            style={{ padding: '16px', marginBottom: '12px', textAlign: 'center' }}
+          >
+            <small style={{ color: 'var(--t2)', fontSize: '13px', lineHeight: 1.6 }}>
+              النقل الحقيقي يعمل داخل تطبيق أندرويد فقط. هذه معاينة واجهة.
+            </small>
+          </div>
+        )}
+
+        {errorMessage && (
+          <div
+            className="card"
+            style={{ padding: '14px 16px', marginBottom: '12px', textAlign: 'center' }}
+          >
+            <small style={{ color: 'var(--danger)', fontSize: '13px', lineHeight: 1.6 }}>
+              {errorMessage}
+            </small>
+          </div>
+        )}
 
         <div className="h2">الملفات</div>
 
