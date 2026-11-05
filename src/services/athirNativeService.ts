@@ -42,6 +42,12 @@ export interface PermissionStatus {
   contactsGranted: boolean;
   allGranted: boolean;
   sdkInt: number;
+  /** MANAGE_EXTERNAL_STORAGE ("All files access"), release builds only. */
+  allFilesAccessGranted?: boolean;
+  /** The OS will no longer show a dialog for hardware/pairing permissions. */
+  sessionPermanentlyDenied?: boolean;
+  /** The OS will no longer show a dialog for storage/media permissions. */
+  mediaPermanentlyDenied?: boolean;
   supported: boolean;
 }
 
@@ -137,6 +143,14 @@ export interface AthirNativePluginInterface {
   setDisplayName(options: { name: string }): Promise<{ success: boolean; name: string }>;
   checkPermissions(): Promise<PermissionStatus>;
   requestPermissions(): Promise<{ requested: boolean }>;
+  /** Camera + nearby/location: asked on every scan/receive visit. */
+  requestSessionPermissions(): Promise<PermissionStatus>;
+  /** Media bundle (images + video + audio), asked once on the first send visit. */
+  requestMediaPermissions(): Promise<PermissionStatus>;
+  /** Opens the system "All files access" screen; resolves alreadyGranted when not needed. */
+  openAllFilesAccessSettings(): Promise<{ alreadyGranted: boolean; opened?: boolean }>;
+  /** This app's own system settings page. */
+  openAppSettings(): Promise<{ opened: boolean }>;
   getMediaCatalog(options: { category: string; query?: string; limit?: number }): Promise<{
     category: string;
     items: CatalogItem[];
@@ -254,6 +268,38 @@ export const athirNativeService = {
     // The authoritative answer is pushed through `permissionsChanged`; this immediate
     // read is only a best-effort snapshot and must never be treated as the final state.
     return { ...(await AthirNative.checkPermissions()), supported: true };
+  },
+
+  /**
+   * Hardware / pairing permissions for THIS session. Nothing is remembered by the app: the
+   * scan and receive screens call this on every visit, so Android's own dialog appears again
+   * each time and the user can see exactly what is being granted.
+   */
+  async requestSessionPermissions(): Promise<PermissionStatus> {
+    requireNative('Session permissions');
+    await AthirNative.requestSessionPermissions();
+    return { ...(await AthirNative.checkPermissions()), supported: true };
+  },
+
+  /**
+   * Storage / media permissions, submitted as ONE platform request (the Android 13+ bundle
+   * shows a single "Allow access to photos and videos" card). Asked only on the first entry
+   * to the send screen; the OS keeps the grant from then on.
+   */
+  async requestMediaPermissions(): Promise<PermissionStatus> {
+    requireNative('Media permissions');
+    await AthirNative.requestMediaPermissions();
+    return { ...(await AthirNative.checkPermissions()), supported: true };
+  },
+
+  async openAllFilesAccessSettings(): Promise<{ alreadyGranted: boolean; opened?: boolean }> {
+    requireNative('All files access');
+    return AthirNative.openAllFilesAccessSettings();
+  },
+
+  async openAppSettings(): Promise<{ opened: boolean }> {
+    requireNative('App settings');
+    return AthirNative.openAppSettings();
   },
 
   async getMediaCatalog(category: CategoryType, query?: string): Promise<CatalogItem[]> {

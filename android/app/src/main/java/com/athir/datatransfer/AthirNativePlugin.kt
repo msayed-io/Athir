@@ -83,24 +83,95 @@ class AthirNativePlugin : Plugin() {
         call.resolve(buildPermissionStatusObject())
     }
 
+    /**
+     * Hardware / pairing permissions (camera + nearby devices or location).
+     *
+     * These belong to the *session*: the scan and receive screens call this on every visit,
+     * so the system dialog appears again each time and no "granted forever" state is ever
+     * stored anywhere. Nothing about the answer is cached by the app.
+     */
+    @PluginMethod
+    fun requestSessionPermissions(call: PluginCall) {
+        requestGroup(call, PermissionCoordinator.missingSessionPermissions(context), KEY_SESSION_REQUESTS)
+    }
+
+    /**
+     * Storage / media permissions (READ_MEDIA_IMAGES + VIDEO + AUDIO on Android 13+, or
+     * READ_EXTERNAL_STORAGE below). Submitted as ONE platform request so Android shows a
+     * single "Allow access to photos and videos" card. Asked once, on the first entry to the
+     * send screen - after that the OS remembers the grant and the picker opens instantly.
+     */
+    @PluginMethod
+    fun requestMediaPermissions(call: PluginCall) {
+        requestGroup(call, PermissionCoordinator.missingMediaPermissions(context), KEY_MEDIA_REQUESTS)
+    }
+
+    /** Back-compat: one platform request covering both groups. */
     @PluginMethod
     override fun requestPermissions(call: PluginCall) {
-        val missing = PermissionCoordinator.getMissingPermissions(context)
+        val missing = PermissionCoordinator.missingSessionPermissions(context) +
+            PermissionCoordinator.missingMediaPermissions(context)
+        requestGroup(call, missing, KEY_SESSION_REQUESTS)
+    }
+
+    private fun requestGroup(call: PluginCall, missing: List<String>, counterKey: String) {
         if (missing.isEmpty()) {
             checkPermissions(call)
             return
         }
-
-        // Request all missing permissions directly on the activity. The authoritative
-        // answer arrives asynchronously in handleRequestPermissionsResult below, which
-        // emits a "permissionsChanged" event with the real, post-dialog status.
         val act = activity
         if (act == null) {
+            Log.e(LOG_TAG, "permission request without an activity")
             call.reject("Activity is not available")
             return
         }
+        prefs().edit().putInt(counterKey, prefs().getInt(counterKey, 0) + 1).apply()
         act.requestPermissions(missing.toTypedArray(), REQUEST_CODE_PERMISSIONS)
         call.resolve(JSObject().put("requested", true).put("code", REQUEST_CODE_PERMISSIONS))
+    }
+
+    /** Opens this app's own system settings page (where revoked permissions can be restored). */
+    @PluginMethod
+    fun openAppSettings(call: PluginCall) {
+        try {
+            val intent = Intent(
+                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:${context.packageName}")
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            call.resolve(JSObject().put("opened", true))
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "could not open app settings", e)
+            call.reject("APP_SETTINGS_FAILED: ${e.message}")
+        }
+    }
+
+    /**
+     * Opens the system "All files access" screen (MANAGE_EXTERNAL_STORAGE, declared only in
+     * the release manifest). Without it Android 11+ hides APK / ZIP / PDF files that belong to
+     * other apps, which is why the files tab could look empty.
+     */
+    @PluginMethod
+    fun openAllFilesAccessSettings(call: PluginCall) {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
+                PermissionCoordinator.isAllFilesAccessGranted()
+            ) {
+                call.resolve(JSObject().put("alreadyGranted", true))
+                return
+            }
+            val intent = Intent(
+                // Literal action string: the constant itself is API 30+, and this branch is
+                // already guarded by the SDK_INT check above.
+                "android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION",
+                Uri.parse("package:${context.packageName}")
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            call.resolve(JSObject().put("alreadyGranted", false).put("opened", true))
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "could not open the all-files access screen", e)
+            call.reject("ALL_FILES_SETTINGS_FAILED: ${e.message}")
+        }
     }
 
     /**
@@ -116,6 +187,17 @@ class AthirNativePlugin : Plugin() {
 
     private fun buildPermissionStatusObject(): JSObject {
         val status = PermissionCoordinator.checkAllPermissions(context)
+        val sessionMissing = PermissionCoordinator.missingSessionPermissions(context)
+        val mediaMissing = PermissionCoordinator.missingMediaPermissions(context)
+        val act = activity
+        // "Permanently denied" = the group is missing, the user has answered at least one
+        // dialog for it, and Android will no longer show a dialog (no rationale flag).
+        val sessionPermanent = sessionMissing.isNotEmpty() &&
+            prefs().getInt(KEY_SESSION_REQUESTS, 0) > 0 &&
+            act != null && !act.shouldShowRequestPermissionRationale(sessionMissing.first())
+        val mediaPermanent = mediaMissing.isNotEmpty() &&
+            prefs().getInt(KEY_MEDIA_REQUESTS, 0) > 0 &&
+            act != null && !act.shouldShowRequestPermissionRationale(mediaMissing.first())
         return JSObject().apply {
             put("mediaGranted", status.mediaGranted)
             put("nearbyGranted", status.nearbyGranted)
@@ -124,8 +206,14 @@ class AthirNativePlugin : Plugin() {
             put("contactsGranted", status.contactsGranted)
             put("allGranted", status.allGranted)
             put("sdkInt", status.sdkInt)
+            put("allFilesAccessGranted", PermissionCoordinator.isAllFilesAccessGranted())
+            put("sessionPermanentlyDenied", sessionPermanent)
+            put("mediaPermanentlyDenied", mediaPermanent)
         }
     }
+
+    private fun prefs(): android.content.SharedPreferences =
+        context.getSharedPreferences("athir_permissions", android.content.Context.MODE_PRIVATE)
 
 
     @PluginMethod
@@ -263,7 +351,12 @@ class AthirNativePlugin : Plugin() {
                     put("name", displayName)
                     put("host", localIp)
                     put("port", activeServerPort)
-                    put("fp", fp)
+                    // The QR carries the fingerprint WITHOUT the ':' separators: 64 chars
+                    // instead of 95. The payload is ~30% smaller, the QR drops several
+                    // versions, and the module size on screen - the real reason a phone
+                    // camera fails to decode it - grows accordingly. The client verifier
+                    // normalises both forms (SessionSecurity.createClientSslContext).
+                    put("fp", fp.replace(":", ""))
                     put("secret", secret)
                     put("transport", "lan")
                 }
@@ -303,6 +396,7 @@ class AthirNativePlugin : Plugin() {
                 }
                 call.resolve(ret)
             } catch (e: Exception) {
+                Log.e(LOG_TAG, "startReceiving failed", e)
                 call.reject("Failed to start receiving: ${e.message}")
             }
         }
@@ -846,6 +940,9 @@ class AthirNativePlugin : Plugin() {
 
     companion object {
         private const val REQUEST_CODE_PERMISSIONS = 1002
+        private const val LOG_TAG = "AthirNative"
+        private const val KEY_SESSION_REQUESTS = "session_request_count"
+        private const val KEY_MEDIA_REQUESTS = "media_request_count"
         private const val INVITE_TITLE = "شارك أثير"
         private const val INVITE_SUBJECT = "أثير | Athir - نقل الملفات بدون إنترنت"
         private const val INVITE_TEXT =

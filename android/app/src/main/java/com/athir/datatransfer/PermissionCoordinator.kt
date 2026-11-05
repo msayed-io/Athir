@@ -53,6 +53,39 @@ object PermissionCoordinator {
         }
     }
 
+    /**
+     * Hardware / pairing permissions: camera, location or nearby-devices. These are tied to a
+     * session and are asked again every time the user opens the scan or receive screen.
+     */
+    fun getSessionPermissions(): Array<String> {
+        return getRequiredCameraPermissions() + getRequiredNearbyPermissions()
+    }
+
+    /**
+     * Storage / media permissions: asked ONCE, the first time the user opens the send screen,
+     * and never again - the OS keeps the grant, so the file picker is never interrupted twice.
+     */
+    fun getMediaPermissions(): Array<String> {
+        return getRequiredMediaPermissions() + getRequiredWritePermissions()
+    }
+
+    fun missingSessionPermissions(context: Context): List<String> {
+        return getSessionPermissions().filter { !isPermissionGranted(context, it) }
+    }
+
+    fun missingMediaPermissions(context: Context): List<String> {
+        return getMediaPermissions().filter { !isPermissionGranted(context, it) }
+    }
+
+    /** "All files access" (MANAGE_EXTERNAL_STORAGE) is a special access, not a runtime grant. */
+    fun isAllFilesAccessGranted(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.os.Environment.isExternalStorageManager()
+        } else {
+            true
+        }
+    }
+
     fun isPermissionGranted(context: Context, permission: String): Boolean {
         return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
     }

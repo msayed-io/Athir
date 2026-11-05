@@ -4,13 +4,20 @@ import android.app.Activity
 import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.hardware.camera2.CaptureRequest
+import android.util.Log
+import android.util.Size
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -63,6 +70,9 @@ class ScannerEngine(private val context: Context) {
     private var cameraProvider: ProcessCameraProvider? = null
     private val isScanning = AtomicBoolean(false)
 
+    /** Timestamp of the last analysed frame; 0 means "nothing analysed yet". */
+    private val lastAnalysisAt = java.util.concurrent.atomic.AtomicLong(0L)
+
     /** The WebView, used to convert page coordinates into content-view coordinates. */
     private var anchorView: View? = null
     private var hostView: FrameLayout? = null
@@ -79,6 +89,7 @@ class ScannerEngine(private val context: Context) {
         activity.runOnUiThread { applyWindowLayout(host) }
     }
 
+    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
     fun startScanning(
         lifecycleOwner: LifecycleOwner,
         hostActivity: Activity?,
@@ -100,11 +111,51 @@ class ScannerEngine(private val context: Context) {
                 cameraProvider = cameraProviderFuture.get()
                 val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
-                val imageAnalysis = ImageAnalysis.Builder()
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                // A QR code carried on a phone screen is DENSE (the pairing payload is a
+                // ~200 byte JSON), so the default 640x480 analysis stream gave ML Kit only
+                // two or three pixels per module and it silently failed to decode. 1280x720
+                // quadruples the pixels per module without slowing the preview down.
+                val resolutionSelector = ResolutionSelector.Builder()
+                    .setResolutionStrategy(
+                        ResolutionStrategy(
+                            Size(1280, 720),
+                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                        )
+                    )
                     .build()
+
+                val analysisBuilder = ImageAnalysis.Builder()
+                    .setResolutionSelector(resolutionSelector)
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+
+                // Continuous autofocus on the analysis stream itself: a blurred frame is the
+                // second most common reason a QR never decodes.
+                Camera2Interop.Extender(analysisBuilder).apply {
+                    setCaptureRequestOption(
+                        CaptureRequest.CONTROL_AF_MODE,
+                        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                    )
+                    setCaptureRequestOption(
+                        CaptureRequest.CONTROL_AF_TRIGGER,
+                        CaptureRequest.CONTROL_AF_TRIGGER_START
+                    )
+                }
+
+                val imageAnalysis = analysisBuilder.build()
+                lastAnalysisAt.set(0L)
                 imageAnalysis.setAnalyzer(cameraExecutor!!) { imageProxy ->
-                    processImageProxy(imageProxy, listener)
+                    // The first frame is always analysed (the throttle must never delay the
+                    // first read); after that, frames are capped at ~10 fps so ML Kit never
+                    // builds a backlog on its own queue.
+                    val now = System.currentTimeMillis()
+                    val previous = lastAnalysisAt.get()
+                    val throttled = previous != 0L && now - previous < ANALYSIS_INTERVAL_MS
+                    if (throttled) {
+                        imageProxy.close()
+                    } else {
+                        lastAnalysisAt.set(now)
+                        processImageProxy(imageProxy, listener)
+                    }
                 }
 
                 val surfaceProvider = attachWindow(hostActivity)?.surfaceProvider
@@ -129,10 +180,12 @@ class ScannerEngine(private val context: Context) {
                 listener.onCameraState("running", "")
             } catch (e: SecurityException) {
                 isScanning.set(false)
+                Log.e(LOG_TAG, "camera permission missing", e)
                 listener.onCameraState("error", "permission")
                 listener.onScanError("Camera permission is not granted")
             } catch (e: Exception) {
                 isScanning.set(false)
+                Log.e(LOG_TAG, "camera initialization failed", e)
                 listener.onCameraState("error", e.message ?: "unknown")
                 listener.onScanError("Camera initialization failed: ${e.message}")
             }
@@ -187,6 +240,7 @@ class ScannerEngine(private val context: Context) {
             startScanLine(host)
             preview
         } catch (e: Exception) {
+            Log.e(LOG_TAG, "camera window could not be attached", e)
             null
         }
     }
@@ -283,18 +337,29 @@ class ScannerEngine(private val context: Context) {
                 ?.addOnSuccessListener { barcodes ->
                     for (barcode in barcodes) {
                         val raw = barcode.rawValue ?: continue
-                        var json: JSONObject? = null
-                        try {
-                            json = JSONObject(raw)
-                        } catch (ignored: Exception) {}
+                        val json = try {
+                            JSONObject(raw)
+                        } catch (ignored: Exception) {
+                            null
+                        }
+
+                        // A random QR (a URL, a Wi-Fi code, ...) must NOT kill the scan
+                        // session. Only a payload that actually carries pairing details stops
+                        // the analyser; anything else is logged and ignored, so the next frame
+                        // is still analysed.
+                        if (!isPairingPayload(json)) {
+                            Log.d(LOG_TAG, "ignored foreign barcode (${raw.length}B)")
+                            continue
+                        }
 
                         isScanning.set(false)
                         listener.onQrScanned(raw, json)
                         break
                     }
                 }
-                ?.addOnFailureListener {
-                    // Ignore transient analysis frame failures
+                ?.addOnFailureListener { error ->
+                    // Transient per-frame failures are expected while the camera focuses.
+                    Log.d(LOG_TAG, "barcode frame failed: ${error.message}")
                 }
                 ?.addOnCompleteListener {
                     imageProxy.close()
@@ -302,6 +367,21 @@ class ScannerEngine(private val context: Context) {
         } else {
             imageProxy.close()
         }
+    }
+
+    /**
+     * A decoded code counts as an Athir pairing payload only when it carries the fields the
+     * transfer layer needs. Everything else is somebody else's QR code.
+     */
+    private fun isPairingPayload(json: JSONObject?): Boolean {
+        if (json == null) return false
+        val host = json.optString("host")
+        val port = json.optInt("port", 0)
+        val fingerprint = json.optString("fp")
+        val secret = json.optString("secret")
+        val ssid = json.optString("ssid")
+        return (host.isNotBlank() && port > 0 && fingerprint.isNotBlank() && secret.isNotBlank()) ||
+            (ssid.isNotBlank() && secret.isNotBlank())
     }
 
     fun stopScanning() {
@@ -319,5 +399,12 @@ class ScannerEngine(private val context: Context) {
         cameraExecutor = null
         barcodeScanner = null
         cameraProvider = null
+    }
+
+    companion object {
+        private const val LOG_TAG = "AthirScan"
+
+        /** ~10 analysed frames per second: fast enough for a QR, light enough for ML Kit. */
+        private const val ANALYSIS_INTERVAL_MS = 100L
     }
 }

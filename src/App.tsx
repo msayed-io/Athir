@@ -1,7 +1,6 @@
 import React from 'react';
 import { NavigationProvider, useAppNavigation } from './services/navigationService';
 import { SvgSprite } from './assets/icons/SvgSprite';
-import { athirNativeService } from './services/athirNativeService';
 import { BackdropBlur } from './components/common/BackdropBlur';
 import { HomeScreen } from './pages/HomeScreen';
 import { SendScreen } from './pages/SendScreen';
@@ -41,37 +40,16 @@ const ScreenRouter: React.FC = () => {
 };
 
 /**
- * Permissions are asked exactly once, at first launch, instead of being triggered by
- * whichever screen happens to need them. `AthirNative.requestPermissions` submits every
- * missing permission in a single platform request, so Android shows its own dialogs
- * back-to-back in one flow (camera, photos/video/audio, nearby devices, notifications,
- * contacts). Nothing here fabricates a grant: the authoritative answer still arrives
- * through the `permissionsChanged` event.
+ * Permissions are deliberately NOT requested at startup.
+ *
+ * Hardware / pairing permissions (camera, nearby devices) belong to a session and are asked
+ * by the scan and receive screens on every visit. Storage / media permissions are asked once,
+ * the first time the user opens the send screen. Requesting everything at launch meant the
+ * user answered a wall of dialogs before doing anything, and every later denial looked like
+ * an app bug instead of a per-session choice.
  */
-let startupPermissionRequestStarted = false;
-
-function useStartupPermissions(): void {
-  React.useEffect(() => {
-    if (startupPermissionRequestStarted) return;
-    if (!athirNativeService.isNative()) return;
-    startupPermissionRequestStarted = true;
-
-    (async () => {
-      try {
-        const status = await athirNativeService.checkPermissions();
-        if (status.allGranted && status.contactsGranted) return;
-        await athirNativeService.requestPermissions();
-      } catch {
-        // The receive/scan/send screens still offer an explicit retry, so a failed
-        // startup request never blocks the app.
-      }
-    })();
-  }, []);
-}
 
 export default function App() {
-  useStartupPermissions();
-
   React.useEffect(() => {
     // 1. Prevent default context menu (long press / right click)
     const handleContextMenu = (e: MouseEvent) => {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { HeaderTop } from '../components/common/HeaderTop';
 import { BottomBar } from '../components/common/BottomBar';
 import { RadarVisual } from '../components/common/RadarVisual';
@@ -25,10 +25,43 @@ export const ReceiveScreen: React.FC = () => {
   const [showQrInline, setShowQrInline] = useState(true);
   const [statusText, setStatusText] = useState('جارٍ بدء وضع الاستلام…');
   const [errorText, setErrorText] = useState('');
-  const [offlineMode, setOfflineMode] = useState<'lan' | 'hotspot' | 'p2p'>('lan');
-  const [offlineBusy, setOfflineBusy] = useState(false);
+  const [linkLabel, setLinkLabel] = useState<string>('');
   const [qrError, setQrError] = useState('');
   const [qrAttempt, setQrAttempt] = useState(0);
+
+  /**
+   * Dynamic hardware adaptation - no manual technology switch anywhere in the UI.
+   *
+   * The app inspects the device silently: if there is no usable LAN address (no router, no
+   * Wi-Fi at all, or a link-local 169.254.x.x address) it starts a router-free link by
+   * itself, preferring the capability the hardware actually reports (Wi-Fi Direct when the
+   * radio supports it and no hotspot is available, otherwise the local-only hotspot whose
+   * SSID/passphrase travel inside the QR code). The QR is regenerated automatically and the
+   * user only has to scan it - they are never asked to choose a protocol.
+   */
+  const startAutomaticLink = useCallback(async () => {
+    try {
+      // The pairing/hardware grant is a per-session one: the system dialog appears now,
+      // on this visit, and nothing about the answer is stored by the app.
+      await athirNativeService.requestSessionPermissions().catch(() => {});
+      const link = await athirNativeService.startOfflineTransport();
+      if (link.qrDataUrl) setQrCodeUrl(link.qrDataUrl);
+      const label =
+        link.transport === 'hotspot'
+          ? `نقطة اتصال محلية: ${link.ssid || 'جاهزة'}`
+          : 'شبكة Wi-Fi Direct جاهزة';
+      setLinkLabel(label);
+      setStatusText(label);
+    } catch (e) {
+      // No fabricated success: if the hardware refuses, the LAN path stays available and the
+      // user reads a real message instead of a dead button.
+      setErrorText(
+        e instanceof Error
+          ? e.message.replace('NATIVE_ONLY: ', '').replace('NO_OFFLINE_TRANSPORT: ', '')
+          : 'تعذّر تشغيل وصلة مباشرة بين الجهازين. تأكد من تفعيل الواي فاي.'
+      );
+    }
+  }, []);
 
   useEffect(() => {
     let unmounted = false;
@@ -49,6 +82,14 @@ export const ReceiveScreen: React.FC = () => {
         if (unmounted) return;
         setSession(s);
         setStatusText('في انتظار المرسل');
+
+        // Silent capability probe: only when the LAN address is unusable does Athir start a
+        // router-free link on its own and put the credentials inside the QR.
+        const lanUsable =
+          !!s.host && s.host !== '127.0.0.1' && !s.host.startsWith('169.254.');
+        if (!lanUsable) {
+          void startAutomaticLink();
+        }
 
         if (s.qrDataUrl) {
           setQrCodeUrl(s.qrDataUrl);
@@ -97,31 +138,7 @@ export const ReceiveScreen: React.FC = () => {
       athirNativeService.stopOfflineTransport().catch(() => {});
       athirNativeService.stopReceiving().catch(() => {});
     };
-  }, [navigate, qrAttempt]);
-
-  const enableOfflineTransport = async () => {
-    if (offlineBusy) return;
-    setOfflineBusy(true);
-    setErrorText('');
-    try {
-      const link = await athirNativeService.startOfflineTransport();
-      setOfflineMode(link.transport);
-      if (link.qrDataUrl) setQrCodeUrl(link.qrDataUrl);
-      setStatusText(
-        link.transport === 'hotspot'
-          ? `نقطة اتصال محلية: ${link.ssid}`
-          : 'شبكة Wi-Fi Direct جاهزة'
-      );
-    } catch (e) {
-      setErrorText(
-        e instanceof Error
-          ? e.message.replace('NATIVE_ONLY: ', '').replace('NO_OFFLINE_TRANSPORT: ', '')
-          : 'تعذّر تشغيل النقل بدون راوتر'
-      );
-    } finally {
-      setOfflineBusy(false);
-    }
-  };
+  }, [navigate, qrAttempt, startAutomaticLink]);
 
   const handleAction = () => {
     if (discoveredPeer && discoveredPeer.secret) {
@@ -185,11 +202,13 @@ export const ReceiveScreen: React.FC = () => {
               <div
                 className="qr-graphic-wrap"
                 style={{
-                  width: '220px',
-                  height: '220px',
+                  // 260px with a 14px white border: the physical module size on screen is
+                  // what decides whether the other phone's camera can decode the code.
+                  width: '260px',
+                  height: '260px',
                   borderRadius: '16px',
                   background: '#ffffff',
-                  padding: '12px',
+                  padding: '14px',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -232,27 +251,21 @@ export const ReceiveScreen: React.FC = () => {
               <p className="qr-subtext" style={{ marginTop: '14px', fontSize: '12px', color: 'var(--t2)', textAlign: 'center' }}>
                 امسح الرمز من جهاز المرسل للربط المباشر
               </p>
-              <button
-                type="button"
-                className="g c"
-                style={{
-                  marginTop: '10px',
-                  height: '38px',
-                  fontSize: '13px',
-                  opacity: offlineBusy ? 0.5 : 1,
-                }}
-                onClick={enableOfflineTransport}
-                disabled={offlineBusy}
-              >
-                <Icon name="hs" />
-                {offlineMode === 'lan'
-                  ? offlineBusy
-                    ? 'جارٍ تجهيز الشبكة…'
-                    : 'نقل بدون راوتر'
-                  : offlineMode === 'hotspot'
-                  ? 'نقطة اتصال محلية'
-                  : 'Wi-Fi Direct'}
-              </button>
+              {linkLabel && (
+                <div
+                  className="g c"
+                  style={{
+                    marginTop: '10px',
+                    padding: '6px 14px',
+                    borderRadius: '18px',
+                    background: 'rgba(69, 146, 255, 0.16)',
+                    fontSize: '12px',
+                  }}
+                >
+                  <Icon name="hs" />
+                  {linkLabel}
+                </div>
+              )}
             </div>
           </div>
         ) : (

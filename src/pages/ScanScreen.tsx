@@ -51,19 +51,35 @@ export const ScanScreen: React.FC = () => {
     });
   }, []);
 
-  // Waits for the authoritative post-dialog permission state instead of guessing.
+  /**
+   * Waits for the authoritative post-dialog permission state instead of guessing.
+   *
+   * This is NOT a discovery fallback: it never sets a peer, never marks a device as found and
+   * never navigates anywhere. It only waits for the system dialog to be answered - the event
+   * is the primary signal, and a state poll is the safety net in case an OEM drops the event.
+   * The camera starts only after the real grant is read back from Android.
+   */
   const waitForPermissionAnswer = useCallback(
     () =>
       new Promise<void>((resolve) => {
         let settled = false;
+        let poll: ReturnType<typeof setInterval> | undefined;
         const finish = () => {
           if (settled) return;
           settled = true;
           cleanup();
+          if (poll) clearInterval(poll);
           resolve();
         };
         const cleanup = athirNativeService.onPermissionsChanged(() => finish());
-        setTimeout(finish, 6000);
+        poll = setInterval(() => {
+          athirNativeService
+            .checkPermissions()
+            .then((status) => {
+              if (status.cameraGranted) finish();
+            })
+            .catch(() => {});
+        }, 700);
       }),
     []
   );
@@ -75,7 +91,9 @@ export const ScanScreen: React.FC = () => {
       if (status && !status.cameraGranted) {
         // The camera permission is requested here only if the user skipped the
         // first-launch batch; the answer is read back from the real system state.
-        await athirNativeService.requestPermissions().catch(() => {});
+        // Camera + nearby devices only: this is a per-session hardware grant, requested
+        // again on every visit to the scan screen.
+        await athirNativeService.requestSessionPermissions().catch(() => {});
         await waitForPermissionAnswer();
         status = await athirNativeService.checkPermissions().catch(() => null);
         if (status && !status.cameraGranted) {
@@ -200,15 +218,33 @@ export const ScanScreen: React.FC = () => {
           psk: discoveredPeer.psk,
           p2pDeviceAddress: discoveredPeer.p2pDeviceAddress,
         });
-        // Give the platform a moment to complete DHCP/group negotiation.
-        await new Promise((resolve) => setTimeout(resolve, 1500));
       }
-      await athirNativeService.connectAndSend({
-        host: discoveredPeer.host,
-        port: discoveredPeer.port,
-        fingerprint: discoveredPeer.fingerprint,
-        secret: discoveredPeer.secret,
-      });
+
+      // A fixed "sleep 1.5s and hope DHCP is done" wait was the reason a real pairing could
+      // fail on one phone and work on another. Instead, the connection itself is the probe:
+      // it is retried with a short backoff while the network finishes negotiating, and it
+      // only succeeds when the TLS session is actually established.
+      const attempts = needsOfflineLink ? 5 : 1;
+      let lastError: unknown = null;
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        try {
+          await athirNativeService.connectAndSend({
+            host: discoveredPeer.host,
+            port: discoveredPeer.port,
+            fingerprint: discoveredPeer.fingerprint,
+            secret: discoveredPeer.secret,
+          });
+          lastError = null;
+          break;
+        } catch (error) {
+          lastError = error;
+          if (!mountedRef.current) return;
+          if (attempt < attempts - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 700));
+          }
+        }
+      }
+      if (lastError) throw lastError;
       navigate('transfer');
     } catch (error) {
       const message =

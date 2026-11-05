@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { SearchField } from 'glisse';
 import { HeaderTop } from '../components/common/HeaderTop';
 import { BottomBar } from '../components/common/BottomBar';
@@ -7,7 +7,11 @@ import { FileSelectList } from '../components/send/FileSelectList';
 import { Icon } from '../assets/icons/SvgSprite';
 import { useAppNavigation } from '../services/navigationService';
 import { storageService } from '../services/storageService';
-import { athirNativeService, CatalogItem } from '../services/athirNativeService';
+import {
+  athirNativeService,
+  CatalogItem,
+  PermissionStatus,
+} from '../services/athirNativeService';
 import { FileTuple } from '../types';
 import './SendScreen.css';
 
@@ -24,7 +28,70 @@ export const SendScreen: React.FC = () => {
   const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [catalogError, setCatalogError] = useState('');
+  const [permStatus, setPermStatus] = useState<PermissionStatus | null>(null);
   const supported = athirNativeService.isNative();
+  /** Latest category/query, so a permission event reloads what the user is actually looking at. */
+  const viewRef = useRef<{ category: string; query: string }>({ category: 'apps', query: '' });
+
+  /**
+   * Storage / media permissions: asked ONCE, on the first entry to this screen.
+   *
+   * All three Android 13+ media permissions go out as one array, so the system shows a single
+   * "Allow access to photos, videos and music" card instead of four dialogs. After the first
+   * grant the OS remembers it and `status.mediaGranted` is true, so the user is never asked
+   * again - the file picker just opens. Hardware/pairing permissions are NOT handled here;
+   * they live with the scan and receive sessions.
+   */
+  useEffect(() => {
+    if (!supported) return;
+    let alive = true;
+
+    (async () => {
+      const status = await athirNativeService.checkPermissions().catch(() => null);
+      if (!alive || !status) return;
+      setPermStatus(status);
+      if (!status.mediaGranted) {
+        await athirNativeService.requestMediaPermissions().catch(() => {});
+      }
+    })();
+
+    const cleanup = athirNativeService.onPermissionsChanged((next) => {
+      if (!alive) return;
+      setPermStatus(next);
+      // A fresh grant can reveal files that were invisible a second ago.
+      athirNativeService.invalidateCatalogCache();
+      void loadCategory(
+        viewRef.current.category as Parameters<typeof loadCategory>[0],
+        viewRef.current.query
+      );
+    });
+
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      // Returning from system settings ("All files access") must refresh the list.
+      athirNativeService.checkPermissions().then((next) => {
+        if (!alive) return;
+        setPermStatus((prev) => {
+          if (prev?.allFilesAccessGranted !== next.allFilesAccessGranted) {
+            athirNativeService.invalidateCatalogCache();
+            void loadCategory(
+              viewRef.current.category as Parameters<typeof loadCategory>[0],
+              viewRef.current.query
+            );
+          }
+          return next;
+        });
+      }).catch(() => {});
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      alive = false;
+      cleanup();
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supported]);
 
   // Selected items stored by filename -> FileTuple
   const [selectedItemsMap, setSelectedItemsMap] = useState<Map<string, FileTuple>>(() => {
@@ -62,6 +129,7 @@ export const SendScreen: React.FC = () => {
   }, [supported]);
 
   useEffect(() => {
+    viewRef.current = { category: activeCategory, query: searchQuery };
     loadCategory(activeCategory, searchQuery);
   }, [activeCategory, searchQuery, loadCategory]);
 
@@ -251,6 +319,43 @@ export const SendScreen: React.FC = () => {
               selectedNames={selectedNames}
               onToggleFile={handleToggleFile}
             />
+            {activeCategory === 'files' &&
+              permStatus &&
+              permStatus.sdkInt >= 30 &&
+              permStatus.allFilesAccessGranted === false && (
+                <div
+                  className="card"
+                  style={{ marginTop: '12px', padding: '16px', textAlign: 'center' }}
+                >
+                  <b style={{ display: 'block', fontSize: '13.5px', marginBottom: '6px' }}>
+                    أندرويد يخفي ملفات التطبيقات الأخرى
+                  </b>
+                  <p
+                    style={{
+                      fontSize: '12.5px',
+                      lineHeight: 1.6,
+                      color: 'var(--t2)',
+                      marginBottom: '10px',
+                    }}
+                  >
+                    لرؤية ملفات APK وZIP وPDF التي نزّلتها تطبيقات أخرى، امنح أثير «الوصول لكل
+                    الملفات». القائمة تتحدّث تلقائيًا عند عودتك.
+                  </p>
+                  <button
+                    type="button"
+                    className="g c"
+                    style={{ height: '38px', fontSize: '13px' }}
+                    onClick={() => {
+                      athirNativeService.openAllFilesAccessSettings().catch(() => {
+                        setCatalogError('تعذّر فتح شاشة الوصول لكل الملفات على هذا الجهاز.');
+                      });
+                    }}
+                  >
+                    السماح بالوصول لكل الملفات
+                  </button>
+                </div>
+              )}
+
             {activeCategory === 'files' && categoryFiles.length === 0 && (
               <p
                 style={{

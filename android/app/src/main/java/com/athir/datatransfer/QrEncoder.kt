@@ -16,7 +16,10 @@ object QrEncoder {
         val hints = EnumMap<EncodeHintType, Any>(EncodeHintType::class.java).apply {
             put(EncodeHintType.CHARACTER_SET, "UTF-8")
             put(EncodeHintType.ERROR_CORRECTION, ErrorCorrectionLevel.M)
-            put(EncodeHintType.MARGIN, 2)
+            // The QR spec requires a quiet zone of 4 modules. The old value of 2 left the
+            // finder patterns touching the white card edge, which is exactly where a phone
+            // camera's contrast detection gives up.
+            put(EncodeHintType.MARGIN, 4)
         }
 
         val writer = QRCodeWriter()
@@ -40,7 +43,7 @@ object QrEncoder {
         return bitmap
     }
 
-    fun generateQrDataUrl(content: String, size: Int = 512): String {
+    fun generateQrDataUrl(content: String, size: Int = 640): String {
         val bitmap = generateQrBitmap(content, size)
         val stream = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)

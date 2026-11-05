@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Release-only manifest overlay.
+
+  MANAGE_EXTERNAL_STORAGE ("All files access") is what makes APK / ZIP / PDF files that were
+  downloaded by OTHER apps visible to Athir's file picker on Android 11+. It is deliberately
+  declared for the release build only: a debug build keeps the plain MediaStore + SAF path,
+  and Play Store policy does not allow this permission for a media app anyway (Athir is
+  distributed as a signed APK from GitHub).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
+</manifest>

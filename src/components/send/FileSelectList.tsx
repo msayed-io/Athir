@@ -9,6 +9,20 @@ interface FileSelectListProps {
   onToggleFile: (file: FileTuple) => void;
 }
 
+/**
+ * The name a user reads: no extension. The real filename (extension included) is what the
+ * native layer transfers - it is never altered, only hidden from the list.
+ * "whatsapp.apk" -> "whatsapp", "graduation.jpg" -> "graduation".
+ */
+const getDisplayName = (filename: string): string => {
+  const dot = filename.lastIndexOf('.');
+  if (dot <= 0) return filename;
+  const ext = filename.slice(dot + 1);
+  // Only strip a real extension, never part of a dotted name like "photo.v2.final".
+  if (ext.length === 0 || ext.length > 5) return filename;
+  return filename.slice(0, dot);
+};
+
 const getFileBadge = (filename: string): string => {
   const parts = filename.split('.');
   if (parts.length > 1) {
@@ -87,6 +101,7 @@ export const FileSelectList: React.FC<FileSelectListProps> = ({
         const thumb = file[2];
         const isSelected = selectedNames.has(name);
         const iconBadge = getFileBadge(name);
+        const displayName = getDisplayName(name);
 
         return (
           <div
@@ -105,7 +120,7 @@ export const FileSelectList: React.FC<FileSelectListProps> = ({
               <span className="ic">{iconBadge}</span>
             )}
             <div className="gr">
-              <b>{name}</b>
+              <b>{displayName}</b>
               <small>{size} MB</small>
             </div>
             <span className="ck">

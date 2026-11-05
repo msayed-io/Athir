@@ -39,6 +39,13 @@ export const PrepareScreen: React.FC = () => {
 
   const applyStatus = useCallback((next: PermissionStatus) => {
     setStatus(next);
+    // A switch that is no longer backed by a real system grant turns itself off. The user
+    // can revoke a permission from system settings while this screen is in the background;
+    // the UI must never keep claiming a grant that the OS has already withdrawn.
+    setActivated((prev) => ({
+      pair: prev.pair && next.nearbyGranted && next.cameraGranted,
+      media: prev.media && next.mediaGranted,
+    }));
   }, []);
 
   const checkPerms = useCallback(async () => {
@@ -68,16 +75,40 @@ export const PrepareScreen: React.FC = () => {
     return cleanup;
   }, [checkPerms, applyStatus]);
 
-  const requestAll = useCallback(async () => {
+  /**
+   * Two independent platform requests, never one blind batch:
+   *  - pairing (camera + nearby/location): re-asked in every session on purpose;
+   *  - media (images + video + audio): the Android 13+ bundle, shown as one card.
+   */
+  const requestGroup = useCallback(async (group: 'pairing' | 'media') => {
     setErrorText('');
     setRequesting(true);
     try {
-      await athirNativeService.requestPermissions();
+      if (group === 'pairing') {
+        await athirNativeService.requestSessionPermissions();
+      } else {
+        await athirNativeService.requestMediaPermissions();
+      }
     } catch (e) {
       setRequesting(false);
       setErrorText('تعذّر طلب الأذونات. افتح إعدادات التطبيق لمنحها يدويًا.');
     }
   }, []);
+
+  // Live truth: whenever the screen becomes visible again (returning from system settings,
+  // from the camera permission dialog, or after unlocking the phone) the real state is read
+  // back from Android. Nothing is cached locally, ever.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void checkPerms();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [checkPerms]);
 
   const sdkVersion = status.sdkInt || 33;
   const granted1 = status.nearbyGranted && status.cameraGranted;
@@ -95,7 +126,7 @@ export const PrepareScreen: React.FC = () => {
       return;
     }
     if (!granted1) {
-      await requestAll();
+      await requestGroup('pairing');
       return;
     }
     setActivated((prev) => ({ ...prev, pair: true }));
@@ -107,7 +138,7 @@ export const PrepareScreen: React.FC = () => {
       return;
     }
     if (!granted2) {
-      await requestAll();
+      await requestGroup('media');
       return;
     }
     setActivated((prev) => ({ ...prev, media: true }));
@@ -176,6 +207,8 @@ export const PrepareScreen: React.FC = () => {
             <small className="perm-state">
               {granted1
                 ? 'ممنوح في النظام · يحتاج تفعيلًا في هذه الزيارة'
+                : status.sessionPermanentlyDenied
+                ? 'مرفوض نهائيًا · فعّله من إعدادات التطبيق'
                 : 'غير ممنوح · اضغط المفتاح لمنحه'}
             </small>
           </div>
@@ -203,6 +236,8 @@ export const PrepareScreen: React.FC = () => {
             <small className="perm-state">
               {granted2
                 ? 'ممنوح في النظام · يحتاج تفعيلًا في هذه الزيارة'
+                : status.mediaPermanentlyDenied
+                ? 'مرفوض نهائيًا · فعّله من إعدادات التطبيق'
                 : 'غير ممنوح · اضغط المفتاح لمنحه'}
             </small>
           </div>
@@ -212,6 +247,37 @@ export const PrepareScreen: React.FC = () => {
           <p style={{ marginTop: '14px', fontSize: '13px', color: 'var(--danger)', textAlign: 'center' }}>
             {errorText}
           </p>
+        )}
+
+        {!unsupported && (status.sessionPermanentlyDenied || status.mediaPermanentlyDenied) && (
+          <div
+            className="card"
+            style={{
+              marginTop: '14px',
+              border: '1px solid rgba(255, 92, 92, 0.35)',
+              padding: '16px',
+            }}
+          >
+            <b style={{ display: 'block', fontSize: '14px', marginBottom: '6px' }}>
+              إذن مرفوض نهائيًا
+            </b>
+            <p style={{ fontSize: '12.5px', color: 'var(--t2)', lineHeight: 1.6 }}>
+              رفضت هذا الإذن أكثر من مرة، لذلك لن يعرضه أندرويد مرة أخرى. افتح إعدادات
+              التطبيق وفعّله يدويًا، وسيتحدّث هذا المفتاح تلقائيًا عند عودتك.
+            </p>
+            <button
+              type="button"
+              className="g c"
+              style={{ marginTop: '10px', height: '38px', fontSize: '13px' }}
+              onClick={() => {
+                athirNativeService.openAppSettings().catch(() => {
+                  setErrorText('تعذّر فتح إعدادات التطبيق على هذا الجهاز.');
+                });
+              }}
+            >
+              فتح إعدادات التطبيق
+            </button>
+          </div>
         )}
 
         {!unsupported && !isReady && count === 2 && (
